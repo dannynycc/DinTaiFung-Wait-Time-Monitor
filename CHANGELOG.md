@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.2 — 2026-04-21
+
+### Added
+- **SQLite 儲存層** — CSV 換成 `wait_log.db`，建立 `wait_log` table 搭配 `idx_timestamp` 與 `idx_store_ts` 兩個索引，大資料量查詢更快
+- **自動遷移** — 啟動時偵測舊 CSV，若 DB 空則自動匯入（1021 筆歷史資料保留），舊 CSV 改名為 `.migrated` 備份
+- **Mobile RWD** — 三段 media query（≤900px 平板、≤600px 手機、≤380px iPhone SE），卡片、圖表、表格分別縮放；手機隱藏「外帶叫號」次要欄位
+- **Footer 標示資料來源** — 採 taiwanstat.com 的中性風格：資料來源連結、非官方聲明、CC BY-NC-SA 4.0 授權、GitHub Issues 聯絡
+
+### Changed
+- 資料檔：`all_branches_log.csv` → `wait_log.db`（SQLite）
+- `/api/data` 改從 DB 讀取，API schema 不變（向下相容前端）
+- `.gitignore` 加入 `server.log`、`server.err.log`、`*.csv.migrated`
+
+### Removed
+- `all_branches_log.csv`（資料已全部遷移至 SQLite）
+
 ## v1.1 — 2026-04-21
 
 ### Removed

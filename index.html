@@ -121,6 +121,114 @@
   .refresh-info {
     text-align: center; font-size: 11px; color: #bbb; margin-top: 14px;
   }
+
+  .site-footer {
+    max-width: 760px;
+    margin: 36px auto 8px;
+    padding: 18px 22px;
+    font-size: 12px;
+    color: #8a7a66;
+    line-height: 1.75;
+    text-align: center;
+    border-top: 1px solid #e4d9c9;
+  }
+  .site-footer a {
+    color: #8b4513;
+    text-decoration: none;
+    border-bottom: 1px dotted #b08860;
+  }
+  .site-footer a:hover { border-bottom-style: solid; }
+  .site-footer .row { margin: 2px 0; }
+  .site-footer .license {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 2px 8px;
+    border: 1px solid #d4c3aa;
+    border-radius: 4px;
+    font-size: 11px;
+  }
+
+  /* ── 平板 (≤ 900px) ─────────────────────────── */
+  @media (max-width: 900px) {
+    body { padding: 14px 14px; }
+    header h1 { font-size: 20px; letter-spacing: 1px; }
+    header .sub { font-size: 11px; }
+
+    .overview {
+      grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+    .store-card { padding: 10px 6px; }
+    .store-card .name { font-size: 12px; margin-bottom: 4px; }
+    .store-card .wait { font-size: 22px; }
+
+    .chart-wrap, .table-wrap { padding: 14px; border-radius: 10px; }
+    .chart-container { height: 280px; }
+    table { font-size: 11.5px; }
+    thead th { padding: 6px 8px; }
+    tbody td { padding: 5px 8px; }
+  }
+
+  /* ── 手機 (≤ 600px) ─────────────────────────── */
+  @media (max-width: 600px) {
+    body { padding: 10px 10px; }
+    header { margin-bottom: 14px; }
+    header h1 { font-size: 17px; letter-spacing: 0.5px; }
+    header .sub { font-size: 10.5px; line-height: 1.5; }
+
+    .overview {
+      grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+    .store-card { padding: 8px 4px; border-radius: 8px; }
+    .store-card .name { font-size: 11px; margin-bottom: 2px; }
+    .store-card .wait { font-size: 20px; }
+    .store-card .unit { font-size: 10px; }
+    .store-card .closed .wait { font-size: 12px; }
+
+    /* 圖表 / 表格容器縮小 padding */
+    .chart-wrap, .table-wrap {
+      padding: 12px 10px;
+      margin-bottom: 14px;
+      border-radius: 8px;
+    }
+    .chart-header, .table-header {
+      gap: 6px; margin-bottom: 8px;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    .chart-header h2, .table-header h2 { font-size: 13px; }
+    .chart-filter { width: 100%; justify-content: space-between; }
+    .chart-filter select, .table-header select {
+      font-size: 12px; padding: 3px 8px; flex: 1;
+    }
+    .chart-container { height: 240px; }
+
+    /* 表格 — 隱藏次要欄位讓主要資訊可讀 */
+    .col-togo { display: none; }
+    table { font-size: 11px; }
+    thead th { padding: 5px 4px; font-size: 10.5px; }
+    tbody td { padding: 4px 4px; }
+    .scroll-box { max-height: 360px; }
+
+    .site-footer {
+      margin-top: 22px;
+      padding: 14px 14px;
+      font-size: 11px;
+      line-height: 1.65;
+    }
+    .site-footer .row { margin: 3px 0; }
+  }
+
+  /* ── 超小螢幕 (≤ 380px，iPhone SE) ──────────── */
+  @media (max-width: 380px) {
+    .overview {
+      grid-template-columns: repeat(3, 1fr);
+    }
+    .store-card .wait { font-size: 18px; }
+  }
 </style>
 </head>
 <body>
@@ -165,7 +273,7 @@
           <th>3~4人</th>
           <th>5~6人</th>
           <th>7人+</th>
-          <th>外帶叫號</th>
+          <th class="col-togo">外帶叫號</th>
         </tr>
       </thead>
       <tbody id="tableBody"></tbody>
@@ -177,6 +285,21 @@
   上次更新: <span id="lastUpdate">-</span>
   &nbsp;|&nbsp; 總筆數: <span id="totalRows">0</span>
 </div>
+
+<footer class="site-footer">
+  <div class="row">
+    資料來源：<a href="https://www.dintaifung.tw/Queue/?type=3" target="_blank" rel="noopener">鼎泰豐官方候位查詢網頁</a>
+  </div>
+  <div class="row">
+    本站為獨立開發專案，與鼎泰豐無任何關係，資料僅供參考。
+  </div>
+  <div class="row">
+    回報問題：<a href="https://github.com/dannynycc/DinTaiFung-Wait-Time-Monitor/issues" target="_blank" rel="noopener">GitHub Issues</a>
+  </div>
+  <div class="row">
+    <a class="license" href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener">CC BY-NC-SA 4.0</a>
+  </div>
+</footer>
 
 <script>
 // ── 顏色配置 ─────────────────────────────────────
@@ -477,7 +600,7 @@ function renderTable() {
     tr.appendChild(createEl('td', r.num_2 === '-1' ? '-' : r.num_2));
     tr.appendChild(createEl('td', r.num_3 === '-1' ? '-' : r.num_3));
     tr.appendChild(createEl('td', r.num_4 === '-1' ? '-' : r.num_4));
-    tr.appendChild(createEl('td', r.togo_numbers || '-'));
+    tr.appendChild(createEl('td', r.togo_numbers || '-', 'col-togo'));
     tbody.appendChild(tr);
   }
 

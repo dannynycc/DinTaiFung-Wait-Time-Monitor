@@ -2,13 +2,14 @@
 
 即時監控鼎泰豐台灣全分店的現場候位時間，提供終端機 CLI 版與網頁版。
 
-![version](https://img.shields.io/badge/version-v1.1-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v1.2-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 ## 功能
 
 - 每 60 秒自動查詢鼎泰豐 [官方候位 API](https://www.dintaifung.tw/Queue/?type=3)
 - 自動略過「無提供內用」的分店（目前是信義店）
-- 資料保存為 CSV，可長期累積
+- 資料以 SQLite 儲存（`wait_log.db`），長期累積效能不衰減
+- 手機、平板、桌機 RWD 支援
 - 即時狀態卡片：每間店一張，依等候時間分紅/橘/綠/灰
 - 趨勢圖（Chart.js）：每間店一條線、時間為 X 軸
 - 滑鼠 hover 線或 legend → 該條線加粗、其他淡化
@@ -36,8 +37,9 @@ python app.py
 .
 ├── app.py                    # 後端 + Web server（主程式）
 ├── index.html                # 前端頁面（Chart.js + vanilla JS）
-├── all_branches_log.csv      # 資料記錄（自動產生）
-└── README.md
+├── wait_log.db               # SQLite 資料庫（自動產生，首次 clone 附示例資料）
+├── README.md
+└── CHANGELOG.md
 ```
 
 ## API
