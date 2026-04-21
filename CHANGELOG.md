@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.1 — 2026-04-21
+
+### Removed
+- `monitor.py` — 原單分店 CLI 版本，功能已完全被 `app.py` 涵蓋
+- `hsinchu_wait_log.csv` — 舊 CLI 版產生的 log，資料已併入 `all_branches_log.csv`
+
+### Changed
+- README 精簡，只保留 Web 版說明
+
 ## v1.0 — 2026-04-21
 
 首次釋出。
