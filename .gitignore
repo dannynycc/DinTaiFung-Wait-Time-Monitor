@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# 編輯器 / IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 注意：CSV 資料檔不加入 ignore，首次 push 當示例資料
+# 之後用 `git update-index --skip-worktree *.csv` 避免新資料被追蹤

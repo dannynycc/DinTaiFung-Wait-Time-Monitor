@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>鼎泰豐全分店 — 候位監控</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft JhengHei", "PingFang TC", sans-serif;
+    background: #f5f0eb;
+    color: #3a3a3a;
+    padding: 20px 24px;
+  }
+
+  header { text-align: center; margin-bottom: 24px; }
+  header h1 { font-size: 24px; color: #8b4513; letter-spacing: 2px; }
+  header .sub { font-size: 12px; color: #999; margin-top: 4px; }
+
+  /* 即時總覽卡片 */
+  .overview {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .store-card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 14px 10px;
+    text-align: center;
+    box-shadow: 0 2px 6px rgba(0,0,0,.06);
+    transition: transform .15s;
+    cursor: pointer;
+  }
+  .store-card:hover { transform: translateY(-2px); }
+  .store-card .name {
+    font-size: 13px; font-weight: 600;
+    color: #5a3a1a; margin-bottom: 6px;
+  }
+  .store-card .wait { font-size: 28px; font-weight: 700; color: #8b4513; }
+  .store-card .unit { font-size: 11px; color: #b08860; }
+  .store-card .closed .wait { font-size: 14px; color: #bbb; }
+  .store-card.hot    { border-left: 4px solid #d32f2f; }
+  .store-card.warm   { border-left: 4px solid #f57c00; }
+  .store-card.cool   { border-left: 4px solid #388e3c; }
+  .store-card.idle   { border-left: 4px solid #bbb; }
+  .store-card.selected { outline: 3px solid #8b4513; outline-offset: -3px; }
+
+  /* 圖表 */
+  .chart-wrap {
+    background: #fff;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.07);
+    margin-bottom: 24px;
+  }
+  .chart-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .chart-header h2 { font-size: 15px; color: #8b4513; }
+  .chart-filter {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .chart-filter label { font-size: 12px; color: #999; }
+  .chart-filter select {
+    font-family: inherit; font-size: 13px;
+    padding: 4px 10px; border: 1px solid #ddd;
+    border-radius: 6px; background: #fff; color: #3a3a3a;
+    cursor: pointer;
+  }
+  .chart-filter select:focus { outline: 2px solid #8b4513; }
+  .chart-container { position: relative; width: 100%; height: 350px; }
+
+  /* 表格 */
+  .table-wrap {
+    background: #fff;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.07);
+  }
+  .table-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .table-header h2 { font-size: 15px; color: #8b4513; }
+  .table-header select {
+    font-family: inherit; font-size: 13px;
+    padding: 4px 10px; border: 1px solid #ddd;
+    border-radius: 6px; background: #fff; color: #3a3a3a;
+    cursor: pointer;
+  }
+  .table-header select:focus { outline: 2px solid #8b4513; }
+  .scroll-box { max-height: 450px; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  thead th {
+    background: #8b4513; color: #fff;
+    padding: 8px 10px; text-align: center;
+    font-weight: 500; position: sticky; top: 0;
+  }
+  tbody tr:nth-child(even) { background: #faf6f1; }
+  tbody tr:hover { background: #f0e6d8; }
+  tbody td {
+    padding: 6px 10px; text-align: center;
+    border-bottom: 1px solid #eee; white-space: nowrap;
+  }
+  .td-wait { font-weight: 700; color: #8b4513; }
+  .td-closed { color: #bbb; font-style: italic; }
+
+  .refresh-info {
+    text-align: center; font-size: 11px; color: #bbb; margin-top: 14px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>鼎泰豐全分店 — 候位監控</h1>
+  <div class="sub">每 60 秒自動更新 | 自動略過無提供內用分店 | 點擊卡片可篩選圖表與表格</div>
+</header>
+
+<div class="overview" id="overview"></div>
+
+<div class="chart-wrap">
+  <div class="chart-header">
+    <h2>各分店等候時間趨勢</h2>
+    <div class="chart-filter">
+      <label>篩選分店:</label>
+      <select id="chartFilter">
+        <option value="__all__">全部分店</option>
+      </select>
+    </div>
+  </div>
+  <div class="chart-container">
+    <canvas id="chart"></canvas>
+  </div>
+</div>
+
+<div class="table-wrap">
+  <div class="table-header">
+    <h2>歷史紀錄</h2>
+    <select id="tableFilter">
+      <option value="__all__">全部分店</option>
+    </select>
+  </div>
+  <div class="scroll-box">
+    <table>
+      <thead>
+        <tr>
+          <th>時間</th>
+          <th>分店</th>
+          <th>等候(分鐘)</th>
+          <th>1~2人</th>
+          <th>3~4人</th>
+          <th>5~6人</th>
+          <th>7人+</th>
+          <th>外帶叫號</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="refresh-info">
+  上次更新: <span id="lastUpdate">-</span>
+  &nbsp;|&nbsp; 總筆數: <span id="totalRows">0</span>
+</div>
+
+<script>
+// ── 顏色配置 ─────────────────────────────────────
+const STORE_COLORS = {
+  '信義店': '#e53935', '復興店': '#8e24aa', '天母店': '#1e88e5',
+  '新竹店': '#43a047', '101店':  '#f4511e', '台中店': '#00897b',
+  '板橋店': '#fdd835', '高雄店': '#6d4c41', '南西店': '#d81b60',
+  'A4店':   '#3949ab', 'A13店':  '#00acc1', '新生店': '#7cb342',
+};
+function storeColor(name) { return STORE_COLORS[name] || '#8b4513'; }
+
+// ── 狀態 ─────────────────────────────────────────
+let allRows = [];
+let knownStores = [];
+let selectedStore = '__all__';  // 圖表+表格+卡片 共用篩選
+
+// ── Chart.js（含 hover 高亮 plugin）──────────────
+let lastHoveredIdx = -1;  // 記住上次 hover 的 dataset，避免重複 update
+
+const highlightPlugin = {
+  id: 'legendHover',
+  beforeEvent(chart, args) {
+    const evt = args.event;
+    if (evt.type !== 'mousemove') return;
+
+    // 偵測線條 hover
+    const elements = chart.getElementsAtEventForMode(
+      evt, 'dataset', { intersect: false }, false
+    );
+    let activeIdx = elements.length > 0 ? elements[0].datasetIndex : -1;
+
+    // 偵測 legend hover
+    const leg = chart.legend;
+    if (leg && leg.legendHitBoxes) {
+      for (let i = 0; i < leg.legendHitBoxes.length; i++) {
+        const hb = leg.legendHitBoxes[i];
+        if (evt.x >= hb.left && evt.x <= hb.left + hb.width &&
+            evt.y >= hb.top  && evt.y <= hb.top + hb.height) {
+          activeIdx = i;
+          break;
+        }
+      }
+    }
+
+    // 只有 hover 目標改變時才重繪
+    if (activeIdx === lastHoveredIdx) return;
+    lastHoveredIdx = activeIdx;
+
+    chart.data.datasets.forEach((ds, i) => {
+      if (activeIdx === -1) {
+        ds.borderWidth = 2;
+        ds.pointRadius = 2.5;
+        ds.borderColor = storeColor(ds.label);
+      } else if (i === activeIdx) {
+        ds.borderWidth = 4.5;
+        ds.pointRadius = 4.5;
+        ds.borderColor = storeColor(ds.label);
+      } else {
+        ds.borderWidth = 1;
+        ds.pointRadius = 1.5;
+        ds.borderColor = storeColor(ds.label) + '40';
+      }
+    });
+    chart.update('none');
+  }
+};
+
+const ctx = document.getElementById('chart').getContext('2d');
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: { datasets: [] },
+  plugins: [highlightPlugin],
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { intersect: false, mode: 'nearest' },
+    scales: {
+      x: {
+        type: 'time',
+        time: {
+          parser: 'yyyy-MM-dd HH:mm:ss',
+          unit: 'minute',
+          tooltipFormat: 'HH:mm',
+          displayFormats: {
+            second: 'HH:mm', minute: 'HH:mm', hour: 'HH:mm'
+          }
+        },
+        title: { display: true, text: '時間', color: '#999' },
+        ticks: {
+          color: '#999',
+          maxTicksLimit: 12,
+          autoSkip: true,
+          callback: function(value) {
+            const d = new Date(value);
+            return String(d.getHours()).padStart(2,'0') + ':' +
+                   String(d.getMinutes()).padStart(2,'0');
+          }
+        },
+        grid: { color: 'rgba(0,0,0,.05)' },
+      },
+      y: {
+        beginAtZero: true,
+        title: { display: true, text: '分鐘', color: '#999' },
+        ticks: { color: '#999', stepSize: 5, precision: 0 },
+        grid: { color: 'rgba(0,0,0,.05)' },
+      }
+    },
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { boxWidth: 12, padding: 14, font: { size: 12 } },
+        // 點擊 legend = 單選那間店（再點一次 = 全部）
+        onClick(evt, item, legend) {
+          const name = item.text;
+          if (selectedStore === name) {
+            setFilter('__all__');
+          } else {
+            setFilter(name);
+          }
+        }
+      },
+      tooltip: {
+        backgroundColor: 'rgba(60,30,10,0.9)',
+        titleFont: { size: 12 }, bodyFont: { size: 13 },
+        mode: 'nearest',
+        intersect: false,
+        callbacks: {
+          title: function(items) {
+            if (!items.length) return '';
+            const raw = items[0].raw || items[0].element || {};
+            const x = raw.x || items[0].label || '';
+            return String(x).replace(/:\d{2}$/, '');
+          },
+          label: c => c.dataset.label + ': ' + c.parsed.y + ' 分鐘'
+        }
+      }
+    }
+  }
+});
+
+// ── 工具 ─────────────────────────────────────────
+function createEl(tag, text, className) {
+  const el = document.createElement(tag);
+  if (text != null) el.textContent = text;
+  if (className) el.className = className;
+  return el;
+}
+
+function heatClass(wt) {
+  const n = Number(wt);
+  if (isNaN(n) || wt === '-1') return 'idle';
+  if (n >= 40) return 'hot';
+  if (n >= 15) return 'warm';
+  return 'cool';
+}
+
+// ── 篩選控制 ─────────────────────────────────────
+function setFilter(storeName) {
+  selectedStore = storeName;
+  document.getElementById('chartFilter').value = storeName;
+  document.getElementById('tableFilter').value = storeName;
+  // 更新卡片 selected 狀態
+  document.querySelectorAll('.store-card').forEach(card => {
+    const cn = card.dataset.store;
+    card.classList.toggle('selected', storeName !== '__all__' && cn === storeName);
+  });
+  renderChart();
+  renderTable();
+}
+
+function populateDropdowns(storeNames) {
+  const chartSel = document.getElementById('chartFilter');
+  const tableSel = document.getElementById('tableFilter');
+
+  // 記住目前的值
+  const curVal = selectedStore;
+
+  // 清除舊選項（保留第一個「全部」）
+  while (chartSel.options.length > 1) chartSel.remove(1);
+  while (tableSel.options.length > 1) tableSel.remove(1);
+
+  for (const name of storeNames) {
+    chartSel.appendChild(new Option(name, name));
+    tableSel.appendChild(new Option(name, name));
+  }
+
+  chartSel.value = curVal;
+  tableSel.value = curVal;
+}
+
+document.getElementById('chartFilter').addEventListener('change', function() {
+  setFilter(this.value);
+});
+document.getElementById('tableFilter').addEventListener('change', function() {
+  setFilter(this.value);
+});
+
+// ── 分組工具 ─────────────────────────────────────
+function groupByStore(rows) {
+  const byStore = {};
+  for (const r of rows) {
+    const name = r.store_name;
+    if (!byStore[name]) byStore[name] = [];
+    byStore[name].push(r);
+  }
+  return byStore;
+}
+
+// ── 渲染：卡片 ──────────────────────────────────
+function renderCards(byStore) {
+  const overview = document.getElementById('overview');
+  overview.replaceChildren();
+
+  for (const name of knownStores) {
+    if (!byStore[name]) continue;
+    const arr = byStore[name];
+    const last = arr[arr.length - 1];
+    const wt = last.wait_time;
+    const isClosed = wt === '-1';
+
+    const card = document.createElement('div');
+    card.className = 'store-card ' + heatClass(wt);
+    if (selectedStore !== '__all__' && selectedStore === name) {
+      card.classList.add('selected');
+    }
+    card.dataset.store = name;
+
+    // 點擊卡片 = 篩選
+    card.addEventListener('click', () => {
+      if (selectedStore === name) {
+        setFilter('__all__');
+      } else {
+        setFilter(name);
+      }
+    });
+
+    card.appendChild(createEl('div', name, 'name'));
+    if (isClosed) {
+      const wrap = createEl('div', null, 'closed');
+      wrap.appendChild(createEl('span', '尚未營業', 'wait'));
+      card.appendChild(wrap);
+    } else {
+      card.appendChild(createEl('span', wt, 'wait'));
+      card.appendChild(createEl('span', ' 分鐘', 'unit'));
+    }
+    overview.appendChild(card);
+  }
+}
+
+// ── 渲染：圖表 ──────────────────────────────────
+function renderChart() {
+  const byStore = groupByStore(allRows);
+  const showStores = selectedStore === '__all__'
+    ? knownStores
+    : [selectedStore];
+
+  const datasets = [];
+  for (const name of showStores) {
+    if (!byStore[name]) continue;
+    const points = byStore[name]
+      .filter(r => r.wait_time !== '-1' && !isNaN(Number(r.wait_time)))
+      .map(r => ({ x: r.timestamp, y: Number(r.wait_time) }));
+
+    const color = storeColor(name);
+    datasets.push({
+      label: name,
+      data: points,
+      borderColor: color,
+      backgroundColor: color + '18',
+      borderWidth: 2,
+      pointRadius: 2.5,
+      pointBackgroundColor: color,
+      tension: 0.25,
+      fill: showStores.length === 1,
+    });
+  }
+  chart.data.datasets = datasets;
+  chart.update('none');
+}
+
+// ── 渲染：表格 ──────────────────────────────────
+function renderTable() {
+  const filtered = selectedStore === '__all__'
+    ? allRows
+    : allRows.filter(r => r.store_name === selectedStore);
+
+  const tbody = document.getElementById('tableBody');
+  tbody.replaceChildren();
+
+  for (let i = filtered.length - 1; i >= 0; i--) {
+    const r = filtered[i];
+    const isClosed = r.wait_time === '-1';
+    const tr = document.createElement('tr');
+    tr.appendChild(createEl('td', r.timestamp));
+    tr.appendChild(createEl('td', r.store_name));
+    tr.appendChild(createEl('td', isClosed ? '尚未營業' : r.wait_time, isClosed ? 'td-closed' : 'td-wait'));
+    tr.appendChild(createEl('td', r.num_1 === '-1' ? '-' : r.num_1));
+    tr.appendChild(createEl('td', r.num_2 === '-1' ? '-' : r.num_2));
+    tr.appendChild(createEl('td', r.num_3 === '-1' ? '-' : r.num_3));
+    tr.appendChild(createEl('td', r.num_4 === '-1' ? '-' : r.num_4));
+    tr.appendChild(createEl('td', r.togo_numbers || '-'));
+    tbody.appendChild(tr);
+  }
+
+  document.getElementById('totalRows').textContent = filtered.length;
+  document.getElementById('lastUpdate').textContent =
+    new Date().toLocaleTimeString('zh-TW', { hour12: false });
+}
+
+// ── 主渲染 ──────────────────────────────────────
+function render(rows) {
+  allRows = rows;
+  const byStore = groupByStore(rows);
+  const newStores = Object.keys(byStore);
+
+  // 下拉選單只在店家清單變動時更新
+  if (newStores.join() !== knownStores.join()) {
+    knownStores = newStores;
+    populateDropdowns(knownStores);
+  }
+
+  renderCards(byStore);
+  renderChart();
+  renderTable();
+}
+
+// ── 定時拉資料 ──────────────────────────────────
+async function refresh() {
+  try {
+    const rows = await (await fetch('/api/data')).json();
+    render(rows);
+  } catch (e) {
+    console.error('fetch error:', e);
+  }
+}
+
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>
