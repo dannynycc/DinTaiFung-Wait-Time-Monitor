@@ -1,5 +1,36 @@
 # Changelog
 
+## v2.0 — 2026-04-27
+
+大版本：資料層改用 event-sourced 設計、UI 從「分鐘 log」改為「變化事件」。
+
+### Added — 資料層
+- **`wait_changes` 表**：只記錄 `wait_time` 變化事件（含 `prev_value`、`duration_min`），相對 raw `wait_log` 壓縮 **16.6x**（64,748 → 3,896 筆）
+- **啟動時自動 backfill**：用 SQL `LAG()` window function 從既有 `wait_log` 推導變化事件
+- **`db_insert` 雙寫**：raw 一筆不少地寫 `wait_log`，僅在值真的變化時才插 `wait_changes`
+- **`EXCLUDED_STORE_IDS`**：永久排除信義店（API 永遠 -1，無內用）
+
+### Added — API
+- `GET /api/changes?date=YYYY-MM-DD` — 回傳指定日期變化事件，含 carry-over（每店前一日最後值補當日 00:00 起點）
+- `GET /api/latest` — 回傳每店最新一筆 raw（給卡片用，含叫號 + 預計停止取號）
+- `GET /api/dates` — DB 中所有有資料的日期（給日期下拉）
+
+### Added — 前端
+- **日期下拉選單**（header）：可切換歷史日期，跨午夜後新「今日」自動出現
+- **卡片新增「預計停止取號」**：依時間早晚著色（紅 ≤18:30 / 橘 ≤19:00 / 棕 普通 / 灰 尚未設定）
+- **圖表改步階線** (`stepped: 'before'`)：忠實表達「值維持到下次變化」的離散性質
+- **表格改 transition log**：`時間 | 分店 | 5分→10分 | 前值持續 32 分鐘`，比每分鐘重複行有意義 10 倍
+
+### Changed
+- 前端主要資料源從 `/api/data` 改為 `/api/changes` + `/api/latest`
+- 歷史日期不 auto-refresh（資料不變動就不浪費 CPU）
+- 預設只顯示今日資料（DB 仍累積全歷史）
+
+### Performance
+- 切換日期、刷新前端速度大幅提升
+- 表格 DOM 從 ~10 萬節點降到 ~3-5 千節點
+- 用 `DocumentFragment` 批次插入減少 reflow
+
 ## v1.2 — 2026-04-21
 
 ### Added

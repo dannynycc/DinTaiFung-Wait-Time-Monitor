@@ -18,6 +18,17 @@
   header { text-align: center; margin-bottom: 24px; }
   header h1 { font-size: 24px; color: #8b4513; letter-spacing: 2px; }
   header .sub { font-size: 12px; color: #999; margin-top: 4px; }
+  header .date-picker {
+    display: inline-flex; align-items: center; gap: 8px;
+    margin-top: 10px; font-size: 13px; color: #5a3a1a;
+  }
+  header .date-picker select {
+    font-family: inherit; font-size: 13px;
+    padding: 4px 10px; border: 1px solid #d4c3aa;
+    border-radius: 6px; background: #fff; color: #3a3a3a;
+    cursor: pointer; min-width: 140px;
+  }
+  header .date-picker select:focus { outline: 2px solid #8b4513; }
 
   /* 即時總覽卡片 */
   .overview {
@@ -43,6 +54,16 @@
   .store-card .wait { font-size: 28px; font-weight: 700; color: #8b4513; }
   .store-card .unit { font-size: 11px; color: #b08860; }
   .store-card .closed .wait { font-size: 14px; color: #bbb; }
+  .store-card .stop-time {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #b08860;
+    line-height: 1.3;
+  }
+  .store-card .stop-time .label { color: #999; }
+  .store-card .stop-time.hot { color: #d32f2f; font-weight: 600; }
+  .store-card .stop-time.warm { color: #f57c00; }
+  .store-card .stop-time.unset { color: #ccc; font-style: italic; }
   .store-card.hot    { border-left: 4px solid #d32f2f; }
   .store-card.warm   { border-left: 4px solid #f57c00; }
   .store-card.cool   { border-left: 4px solid #388e3c; }
@@ -235,7 +256,11 @@
 
 <header>
   <h1>鼎泰豐全分店 — 候位監控</h1>
-  <div class="sub">每 60 秒自動更新 | 自動略過無提供內用分店 | 點擊卡片可篩選圖表與表格</div>
+  <div class="sub">資料每 60 秒更新（圖表為步階線，只在等候變化時跳）| 點卡片可篩選</div>
+  <div class="date-picker">
+    <label>日期：</label>
+    <select id="dateFilter"></select>
+  </div>
 </header>
 
 <div class="overview" id="overview"></div>
@@ -268,12 +293,8 @@
         <tr>
           <th>時間</th>
           <th>分店</th>
-          <th>等候(分鐘)</th>
-          <th>1~2人</th>
-          <th>3~4人</th>
-          <th>5~6人</th>
-          <th>7人+</th>
-          <th class="col-togo">外帶叫號</th>
+          <th>變化</th>
+          <th>前值持續</th>
         </tr>
       </thead>
       <tbody id="tableBody"></tbody>
@@ -315,6 +336,26 @@ function storeColor(name) { return STORE_COLORS[name] || '#8b4513'; }
 let allRows = [];
 let knownStores = [];
 let selectedStore = '__all__';  // 圖表+表格+卡片 共用篩選
+let selectedDate = todayStr();  // YYYY-MM-DD
+
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+}
+
+function dateLabel(dateStr) {
+  const t = todayStr();
+  if (dateStr === t) return `${dateStr}（今日）`;
+  const d = new Date(dateStr + 'T00:00:00');
+  const now = new Date(t + 'T00:00:00');
+  const diff = Math.round((now - d) / 86400000);
+  if (diff === 1) return `${dateStr}（昨日）`;
+  if (diff === 2) return `${dateStr}（前日）`;
+  const wd = ['日','一','二','三','四','五','六'][d.getDay()];
+  return `${dateStr}（週${wd}）`;
+}
 
 // ── Chart.js（含 hover 高亮 plugin）──────────────
 let lastHoveredIdx = -1;  // 記住上次 hover 的 dataset，避免重複 update
@@ -508,16 +549,32 @@ function groupByStore(rows) {
   return byStore;
 }
 
-// ── 渲染：卡片 ──────────────────────────────────
-function renderCards(byStore) {
+// 把 unix timestamp 格式化成 HH:MM
+function fmtStopTime(unixTs) {
+  if (!unixTs || unixTs === 0) return null;
+  const d = new Date(unixTs * 1000);
+  return String(d.getHours()).padStart(2,'0') + ':' +
+         String(d.getMinutes()).padStart(2,'0');
+}
+
+// 依停止取號時間判斷熱度（越早 = 越熱）
+function stopTimeHeat(unixTs) {
+  if (!unixTs) return 'unset';
+  const d = new Date(unixTs * 1000);
+  const h = d.getHours() + d.getMinutes() / 60;
+  if (h < 18.5) return 'hot';
+  if (h < 19.0) return 'warm';
+  return '';
+}
+
+// ── 渲染：卡片（用 /api/latest 給每店「現在」的值）───
+function renderCards(latestList) {
   const overview = document.getElementById('overview');
   overview.replaceChildren();
 
-  for (const name of knownStores) {
-    if (!byStore[name]) continue;
-    const arr = byStore[name];
-    const last = arr[arr.length - 1];
-    const wt = last.wait_time;
+  for (const r of latestList) {
+    const name = r.store_name;
+    const wt = r.wait_time;
     const isClosed = wt === '-1';
 
     const card = document.createElement('div');
@@ -527,13 +584,8 @@ function renderCards(byStore) {
     }
     card.dataset.store = name;
 
-    // 點擊卡片 = 篩選
     card.addEventListener('click', () => {
-      if (selectedStore === name) {
-        setFilter('__all__');
-      } else {
-        setFilter(name);
-      }
+      setFilter(selectedStore === name ? '__all__' : name);
     });
 
     card.appendChild(createEl('div', name, 'name'));
@@ -545,83 +597,143 @@ function renderCards(byStore) {
       card.appendChild(createEl('span', wt, 'wait'));
       card.appendChild(createEl('span', ' 分鐘', 'unit'));
     }
+
+    // 預計停止取號時間
+    const stopStr = fmtStopTime(r.last_time);
+    const stopDiv = document.createElement('div');
+    const heat = stopTimeHeat(r.last_time);
+    stopDiv.className = 'stop-time ' + heat;
+    if (stopStr) {
+      stopDiv.appendChild(createEl('span', '止號 ', 'label'));
+      stopDiv.appendChild(createEl('span', stopStr));
+    } else {
+      stopDiv.textContent = '止號 尚未設定';
+    }
+    card.appendChild(stopDiv);
+
     overview.appendChild(card);
   }
 }
 
-// ── 渲染：圖表 ──────────────────────────────────
-function renderChart() {
-  const byStore = groupByStore(allRows);
+// ── 把 changes 轉成 chart datasets（step line）───
+// 邏輯：每個 change event 是一個 (timestamp, wait_time)。
+// Chart.js 用 stepped:'before' → 線條會在 timestamp 時刻「跳」到新值。
+// 為了讓最後一段值有畫到「現在」，幫每店多補一個延伸點到當日最末。
+function buildChartDatasets(changes, dateStr) {
+  const byStore = {};
+  for (const r of changes) {
+    if (r.wait_time === '-1' || isNaN(Number(r.wait_time))) continue;
+    if (!byStore[r.store_name]) byStore[r.store_name] = [];
+    byStore[r.store_name].push({ x: r.timestamp, y: Number(r.wait_time) });
+  }
+
+  // 延伸線到當日最末（看歷史 = 當日 23:59:59；看今日 = 當下時間）
+  const isToday = dateStr === todayStr();
+  const tail = isToday
+    ? new Date()
+    : new Date(dateStr + 'T23:59:59');
+  const tailStr = dateStr + ' ' +
+    String(tail.getHours()).padStart(2,'0') + ':' +
+    String(tail.getMinutes()).padStart(2,'0') + ':' +
+    String(tail.getSeconds()).padStart(2,'0');
+
   const showStores = selectedStore === '__all__'
-    ? knownStores
-    : [selectedStore];
+    ? Object.keys(byStore)
+    : (byStore[selectedStore] ? [selectedStore] : []);
 
   const datasets = [];
   for (const name of showStores) {
-    if (!byStore[name]) continue;
-    const points = byStore[name]
-      .filter(r => r.wait_time !== '-1' && !isNaN(Number(r.wait_time)))
-      .map(r => ({ x: r.timestamp, y: Number(r.wait_time) }));
-
+    const pts = byStore[name].slice();
+    // 補延伸點：用最後一個值延到 tail
+    if (pts.length > 0) {
+      pts.push({ x: tailStr, y: pts[pts.length - 1].y });
+    }
     const color = storeColor(name);
     datasets.push({
       label: name,
-      data: points,
+      data: pts,
       borderColor: color,
-      backgroundColor: color + '18',
+      backgroundColor: color + '20',
       borderWidth: 2,
-      pointRadius: 2.5,
+      pointRadius: 3,
       pointBackgroundColor: color,
-      tension: 0.25,
+      stepped: 'before',  // 步階線：橫線維持到下個變化點才跳
       fill: showStores.length === 1,
     });
   }
-  chart.data.datasets = datasets;
+  return datasets;
+}
+
+function renderChart() {
+  chart.data.datasets = buildChartDatasets(allRows, selectedDate);
   chart.update('none');
 }
 
-// ── 渲染：表格 ──────────────────────────────────
+// ── 渲染：表格（transition log）─────────────────
+const MAX_TABLE_ROWS = 500;
+
+function fmtDuration(min) {
+  if (min === null || min === undefined) return '—';
+  if (min < 60) return `${min} 分`;
+  const h = Math.floor(min / 60), m = min % 60;
+  return m === 0 ? `${h} 小時` : `${h}小時${m}分`;
+}
+
+function fmtChange(prev, next) {
+  const fmtVal = v => v === '-1' ? '未營業' : `${v}分`;
+  if (prev === null || prev === undefined) return fmtVal(next);  // 起點
+  return `${fmtVal(prev)} → ${fmtVal(next)}`;
+}
+
 function renderTable() {
   const filtered = selectedStore === '__all__'
     ? allRows
     : allRows.filter(r => r.store_name === selectedStore);
 
-  const tbody = document.getElementById('tableBody');
-  tbody.replaceChildren();
+  const totalCount = filtered.length;
+  const showRows = totalCount > MAX_TABLE_ROWS
+    ? filtered.slice(-MAX_TABLE_ROWS)
+    : filtered;
 
-  for (let i = filtered.length - 1; i >= 0; i--) {
-    const r = filtered[i];
-    const isClosed = r.wait_time === '-1';
+  const frag = document.createDocumentFragment();
+  for (let i = showRows.length - 1; i >= 0; i--) {
+    const r = showRows[i];
     const tr = document.createElement('tr');
+
+    // 時間（含秒）
     tr.appendChild(createEl('td', r.timestamp));
     tr.appendChild(createEl('td', r.store_name));
-    tr.appendChild(createEl('td', isClosed ? '尚未營業' : r.wait_time, isClosed ? 'td-closed' : 'td-wait'));
-    tr.appendChild(createEl('td', r.num_1 === '-1' ? '-' : r.num_1));
-    tr.appendChild(createEl('td', r.num_2 === '-1' ? '-' : r.num_2));
-    tr.appendChild(createEl('td', r.num_3 === '-1' ? '-' : r.num_3));
-    tr.appendChild(createEl('td', r.num_4 === '-1' ? '-' : r.num_4));
-    tr.appendChild(createEl('td', r.togo_numbers || '-', 'col-togo'));
-    tbody.appendChild(tr);
+
+    // 變化欄：「-1 → 0」這種有顏色標示
+    const isOpening = r.prev_value === '-1' && r.wait_time !== '-1';
+    const isClosing = r.wait_time === '-1';
+    const cls = isOpening ? 'td-wait' : (isClosing ? 'td-closed' : 'td-wait');
+    tr.appendChild(createEl('td', fmtChange(r.prev_value, r.wait_time), cls));
+
+    tr.appendChild(createEl('td', fmtDuration(r.duration_min)));
+    frag.appendChild(tr);
   }
 
-  document.getElementById('totalRows').textContent = filtered.length;
+  document.getElementById('tableBody').replaceChildren(frag);
+
+  document.getElementById('totalRows').textContent =
+    totalCount > MAX_TABLE_ROWS
+      ? `${totalCount} 個變化（顯示最新 ${MAX_TABLE_ROWS}）`
+      : `${totalCount} 個變化`;
   document.getElementById('lastUpdate').textContent =
     new Date().toLocaleTimeString('zh-TW', { hour12: false });
 }
 
 // ── 主渲染 ──────────────────────────────────────
-function render(rows) {
-  allRows = rows;
-  const byStore = groupByStore(rows);
-  const newStores = Object.keys(byStore);
-
-  // 下拉選單只在店家清單變動時更新
+function render(changesRows, latestList) {
+  allRows = changesRows;
+  // 下拉店家清單從 latestList 抽（因為 latest 一定有所有「目前活躍」的店）
+  const newStores = latestList.map(r => r.store_name);
   if (newStores.join() !== knownStores.join()) {
     knownStores = newStores;
     populateDropdowns(knownStores);
   }
-
-  renderCards(byStore);
+  renderCards(latestList);
   renderChart();
   renderTable();
 }
@@ -629,15 +741,58 @@ function render(rows) {
 // ── 定時拉資料 ──────────────────────────────────
 async function refresh() {
   try {
-    const rows = await (await fetch('/api/data')).json();
-    render(rows);
+    const [changes, latest] = await Promise.all([
+      fetch(`/api/changes?date=${selectedDate}`).then(r => r.json()),
+      fetch('/api/latest').then(r => r.json()),
+    ]);
+    render(changes, latest);
   } catch (e) {
     console.error('fetch error:', e);
   }
 }
 
-refresh();
-setInterval(refresh, 15000);
+let autoRefreshTimer = null;
+function setupAutoRefresh() {
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  // 只在「今日」才自動刷新（歷史日資料不會變，省 CPU）
+  if (selectedDate === todayStr()) {
+    autoRefreshTimer = setInterval(refresh, 15000);
+  }
+}
+
+async function populateDateDropdown() {
+  try {
+    const dates = await (await fetch('/api/dates')).json();
+    // 確保今天一定在清單裡（剛開新的一天、DB 還沒資料時）
+    const t = todayStr();
+    const set = new Set(dates);
+    if (!set.has(t)) dates.unshift(t);
+
+    const sel = document.getElementById('dateFilter');
+    sel.replaceChildren();
+    for (const d of dates) {
+      sel.appendChild(new Option(dateLabel(d), d));
+    }
+    sel.value = selectedDate;
+  } catch (e) {
+    console.error('dates fetch error:', e);
+  }
+}
+
+document.getElementById('dateFilter').addEventListener('change', function() {
+  selectedDate = this.value;
+  // 保留分店篩選（切昨日 → 依然顯示同一家店的昨日資料）
+  refresh();
+  setupAutoRefresh();  // 切歷史日就停 timer，切回今日就恢復
+});
+
+(async () => {
+  await populateDateDropdown();
+  refresh();
+  setupAutoRefresh();
+  // 每 10 分鐘重新掃日期清單（跨午夜後能自動出現新的今日選項）
+  setInterval(populateDateDropdown, 600000);
+})();
 </script>
 </body>
 </html>
