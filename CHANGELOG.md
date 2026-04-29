@@ -1,5 +1,30 @@
 # Changelog
 
+## v2.1 — 2026-04-29 14:31
+
+維運強化：補上 watchdog 自動重啟機制與 start/stop 腳本，解決 server 偶發離線無人重拉的問題。
+
+### Added
+- **`watchdog.py`** — 獨立 supervisor process，用 `pythonw.exe` 跑（GUI subsystem 不 attach console，免疫 console signal）
+  - 每 30 秒檢查 `app.py` process 狀態 + HTTP `/api/stores` 健康檢查
+  - process 退出 → 5 秒 backoff 後重啟
+  - HTTP 連續失敗 3 次 → kill + 重啟
+  - 所有事件寫 `watchdog.log`（含時間戳）
+- **`start.bat`** — 雙擊啟動 watchdog（背景 hidden）
+  - 已在執行 → 偵測 PID 並略過，不會重複啟動
+  - 偵測到孤兒 `app.py`（watchdog 已死但 app 還在）→ 自動清掉再起新 watchdog
+- **`stop.bat`** — 雙擊停止整個 process tree（先殺 watchdog 避免重啟競爭，再殺 app）
+
+### Fixed (root cause)
+- **server 自己掛掉之謎**：`HTTPServer.serve_forever()` 在 main thread，console close signal (`CTRL_CLOSE_EVENT`) 會打斷它並被 `try/except KeyboardInterrupt` 安靜吞掉，留下空 stderr + log 戛然而止的特徵。原先用 `Start-Process python.exe` 啟動仍 attach 在 hidden console，PowerShell session 結束時連帶被殺
+- 改用 `pythonw.exe` 啟 watchdog + `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` 啟 app.py，整個 process tree 完全脫離 console session
+
+### Changed
+- `.gitignore` 加入 `watchdog.log`（runtime log，不需追蹤）
+
+### Tested
+9 種情境逐一驗證（見 commit message）：全停→啟、running→啟（略過）、running→停、空→停、連兩次啟、kill app（自動重啟）、kill watchdog（app 變孤兒）、孤兒→啟（自動清乾淨）、回歸測試。
+
 ## v2.0 — 2026-04-27
 
 大版本：資料層改用 event-sourced 設計、UI 從「分鐘 log」改為「變化事件」。

@@ -18,6 +18,7 @@ Thumbs.db
 # Server 執行期 log（每次跑都會重寫）
 server.log
 server.err.log
+watchdog.log
 
 # 舊 CSV 備份（已遷移至 SQLite）
 *.csv.migrated

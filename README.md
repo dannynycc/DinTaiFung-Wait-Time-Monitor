@@ -2,7 +2,9 @@
 
 即時監控鼎泰豐台灣全分店的現場候位時間，提供 Web 即時看板 + 變化事件分析。
 
-![version](https://img.shields.io/badge/version-v2.0-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v2.1-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+
+> 最後更新：2026-04-29 14:31
 
 ## 功能
 
@@ -24,9 +26,32 @@
 
 ## 快速啟動
 
+雙擊 `start.bat`（推薦，含 watchdog 自動重啟）：
+
+```
+start.bat   # 背景啟動 watchdog + app（互動式略過已執行檢查）
+stop.bat    # 停止整個 process tree
+```
+
+或直接跑（無 watchdog 守護，不建議生產用）：
+
 ```bash
 python app.py
 # 開 http://localhost:5678
+```
+
+### Watchdog 機制
+
+`watchdog.py` 用 `pythonw.exe` 跑（GUI subsystem，完全脫離 console），每 30 秒檢查：
+
+- `app.py` process 是否存活 → 死了就 5 秒後重啟
+- HTTP `GET /api/stores` 是否回應 → 連續失敗 3 次 kill + 重啟
+
+事件寫入 `watchdog.log`（含時間戳）。Process tree：
+
+```
+pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
+└─ python.exe  app.py     ← watchdog 自動 spawn + 監控
 ```
 
 ## 相依
@@ -41,10 +66,15 @@ python app.py
 ```
 .
 ├── app.py                    # 後端 + Web server（主程式）
+├── watchdog.py               # Supervisor（pythonw 跑，自動重啟 app）
 ├── index.html                # 前端頁面（Chart.js + vanilla JS）
+├── start.bat                 # 雙擊啟動（背景 hidden）
+├── stop.bat                  # 雙擊停止整個 process tree
 ├── wait_log.db               # SQLite 資料庫（自動產生）
 │                              ├─ wait_log    每分鐘 raw 紀錄
 │                              └─ wait_changes 變化事件（推導+持續累積）
+├── server.log / server.err.log  # app.py 執行 log（gitignore）
+├── watchdog.log              # watchdog 事件 log（gitignore）
 ├── README.md
 └── CHANGELOG.md
 ```
