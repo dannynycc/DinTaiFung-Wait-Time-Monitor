@@ -323,11 +323,14 @@ def fetch_store(store_id):
         ["curl", "-s", "-X", "POST", API_URL,
          "-d", f"storeid={store_id}",
          "-H", "Content-Type: application/x-www-form-urlencoded"],
-        capture_output=True, text=True, timeout=15
+        capture_output=True, timeout=15
     )
+    # Codex 2026-05-07 23:22 +08:00：避免 Windows 預設 cp950 解碼 curl 輸出時拋例外。
+    stdout = result.stdout.decode("utf-8", errors="replace") if result.stdout else ""
+    stderr = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
     if result.returncode != 0:
-        raise RuntimeError(f"curl failed: {result.stderr}")
-    data = json.loads(result.stdout)
+        raise RuntimeError(f"curl failed: {stderr}")
+    data = json.loads(stdout)
     return data[0] if data else None
 
 

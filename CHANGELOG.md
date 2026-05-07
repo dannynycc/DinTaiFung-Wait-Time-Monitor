@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.2 — 2026-05-07 23:22
+
+Codex 首次接手維護：修正 Windows 環境下 `curl` 輸出被預設 cp950 解碼導致背景抓取執行緒拋出 `UnicodeDecodeError` 的問題，並同步 README 與版本資訊。
+
+### 修正
+- `app.py` 呼叫 `curl` 時改以 bytes 接收 stdout/stderr，再明確用 UTF-8 解碼，避免分店查詢結果因 Windows 預設碼頁解碼失敗而變成 `None`。
+
+### 變更
+- `README.md` 版本徽章更新為 `v2.2`。
+- `README.md` 補上 Codex 接手維護時間與本次編碼修正說明。
+- 本次起 CHANGELOG 依使用者要求以繁體中文撰寫。
+
+### 測試
+- `python -m py_compile app.py watchdog.py`
+- `GET /`、`GET /api/stores`、`GET /api/latest` 均回應 `200`
+- 確認 `:5678` 正在 Listen，且 watchdog/app 僅保留一組背景行程
+
 ## v2.1 — 2026-04-29 14:31
 
 維運強化：補上 watchdog 自動重啟機制與 start/stop 腳本，解決 server 偶發離線無人重拉的問題。

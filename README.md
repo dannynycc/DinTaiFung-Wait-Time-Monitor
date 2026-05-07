@@ -2,9 +2,9 @@
 
 即時監控鼎泰豐台灣全分店的現場候位時間，提供 Web 即時看板 + 變化事件分析。
 
-![version](https://img.shields.io/badge/version-v2.1-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v2.2-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-04-29 14:31
+> 最後更新：2026-05-07 23:22（Codex 接手維護）
 
 ## 功能
 
@@ -60,6 +60,8 @@ pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
 - `curl`（Windows 10+ / macOS / Linux 皆內建）
 
 用 `curl` 而非 `requests` 是因為鼎泰豐伺服器憑證缺少 Subject Key Identifier，Python 的 SSL 驗證會拒絕，curl 預設較寬容。
+
+> Codex 2026-05-07 23:22 +08:00：`app.py` 會先以 bytes 接收 `curl` 的 stdout/stderr，再用 UTF-8 解碼，避免 Windows 預設 cp950 造成背景抓取執行緒拋出 `UnicodeDecodeError`。
 
 ## 檔案結構
 
