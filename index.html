@@ -739,15 +739,43 @@ function render(changesRows, latestList) {
 }
 
 // ── 定時拉資料 ──────────────────────────────────
-async function refresh() {
+// Codex 2026-05-08 10:22 +08:00：前端輪詢加上 in-flight guard 與逾時取消，避免斷線時堆積未完成 fetch。
+const FETCH_TIMEOUT_MS = 10000;
+let refreshInFlight = false;
+let refreshController = null;
+
+async function fetchJson(url, signal) {
+  const resp = await fetch(url, { signal });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+async function refresh(options = {}) {
+  if (refreshInFlight) {
+    if (!options.force) return;
+    if (refreshController) refreshController.abort();
+  }
+
+  refreshInFlight = true;
+  const requestDate = selectedDate;
+  const controller = new AbortController();
+  refreshController = controller;
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
   try {
     const [changes, latest] = await Promise.all([
-      fetch(`/api/changes?date=${selectedDate}`).then(r => r.json()),
-      fetch('/api/latest').then(r => r.json()),
+      fetchJson(`/api/changes?date=${encodeURIComponent(requestDate)}`, controller.signal),
+      fetchJson('/api/latest', controller.signal),
     ]);
-    render(changes, latest);
+    if (selectedDate === requestDate) render(changes, latest);
   } catch (e) {
-    console.error('fetch error:', e);
+    if (e.name !== 'AbortError') console.error('fetch error:', e);
+  } finally {
+    clearTimeout(timeoutId);
+    if (refreshController === controller) {
+      refreshInFlight = false;
+      refreshController = null;
+    }
   }
 }
 
@@ -782,7 +810,7 @@ async function populateDateDropdown() {
 document.getElementById('dateFilter').addEventListener('change', function() {
   selectedDate = this.value;
   // 保留分店篩選（切昨日 → 依然顯示同一家店的昨日資料）
-  refresh();
+  refresh({ force: true });
   setupAutoRefresh();  // 切歷史日就停 timer，切回今日就恢復
 });
 

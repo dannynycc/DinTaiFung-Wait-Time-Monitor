@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.3 — 2026-05-08 10:22
+
+Codex 針對常駐服務做記憶體與斷線恢復檢查：未發現典型線性 memory leak，並補強 HTTP server、watchdog 與前端輪詢，降低長時間執行時的錯誤 log 膨脹與請求堆積風險。
+
+### 修正
+- `app.py` JSON/HTML 回應統一走 `_bytes_response()`，client 已斷線時安靜略過 `BrokenPipeError`、`ConnectionAbortedError`、`ConnectionResetError`，避免 `server.err.log` 被正常斷線 traceback 持續灌大。
+- `watchdog.py` 健康檢查會讀完整 response body，避免 supervisor 自己提早關閉連線造成 app 端 `ConnectionAbortedError`。
+- `watchdog.py` 啟動 `app.py` 後明確關閉父行程持有的 stdout/stderr log handle，避免 watchdog 常駐時多持有檔案描述。
+
+### 變更
+- `app.py` 從單執行緒 `HTTPServer` 改為 `ThreadingHTTPServer` 包裝的 `LongRunningHTTPServer`，避免單一慢請求阻塞 `/api/stores` 健康檢查。
+- `index.html` 前端輪詢新增 in-flight guard、10 秒 fetch timeout 與日期切換時的舊請求取消，後端卡住或斷線時不會持續疊未完成請求。
+- `README.md` 版本徽章更新為 `v2.3`，補上本次常駐穩定性與斷線恢復說明。
+- 本次修改檔案皆依使用者要求標註 `Codex 2026-05-08 10:22 +08:00`。
+
+### 測試
+- `python -m py_compile app.py watchdog.py`
+- `GET /` 回應 `200`
+- `GET /api/latest` 回應 `200`
+- 連續 240 次 API 請求粗略壓測：`app.py` 工作集曾上升後回落，未呈現線性 memory leak 型態
+- 重啟 watchdog/app 後確認僅保留一組背景行程，且 `server.err.log` 未再新增健康檢查造成的斷線 traceback
+
 ## v2.2 — 2026-05-07 23:22
 
 Codex 首次接手維護：修正 Windows 環境下 `curl` 輸出被預設 cp950 解碼導致背景抓取執行緒拋出 `UnicodeDecodeError` 的問題，並同步 README 與版本資訊。

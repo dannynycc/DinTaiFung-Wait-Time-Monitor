@@ -2,9 +2,9 @@
 
 即時監控鼎泰豐台灣全分店的現場候位時間，提供 Web 即時看板 + 變化事件分析。
 
-![version](https://img.shields.io/badge/version-v2.2-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v2.3-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-05-07 23:22（Codex 接手維護）
+> 最後更新：2026-05-08 10:22 +08:00（Codex：常駐穩定性與斷線恢復強化）
 
 ## 功能
 
@@ -23,6 +23,7 @@
 - **單店篩選**：點卡片、點 Legend、或下拉選單，圖表+表格同步切換
 - **手機/平板/桌機 RWD** 全支援
 - 「今日」每 15 秒自動刷新；歷史日不刷新（省 CPU）
+- 前端輪詢具備逾時取消與 in-flight guard，後端卡住或斷線時不會堆積未完成請求
 
 ## 快速啟動
 
@@ -46,6 +47,7 @@ python app.py
 
 - `app.py` process 是否存活 → 死了就 5 秒後重啟
 - HTTP `GET /api/stores` 是否回應 → 連續失敗 3 次 kill + 重啟
+- 健康檢查會讀完整 response body，避免 supervisor 自己提早斷線造成 server 端錯誤 log
 
 事件寫入 `watchdog.log`（含時間戳）。Process tree：
 
@@ -62,6 +64,8 @@ pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
 用 `curl` 而非 `requests` 是因為鼎泰豐伺服器憑證缺少 Subject Key Identifier，Python 的 SSL 驗證會拒絕，curl 預設較寬容。
 
 > Codex 2026-05-07 23:22 +08:00：`app.py` 會先以 bytes 接收 `curl` 的 stdout/stderr，再用 UTF-8 解碼，避免 Windows 預設 cp950 造成背景抓取執行緒拋出 `UnicodeDecodeError`。
+
+> Codex 2026-05-08 10:22 +08:00：`app.py` 改用 threaded HTTP server，client 斷線時不再把 `ConnectionAbortedError` traceback 持續寫入 `server.err.log`；`watchdog.py` 啟動子行程後會關閉父行程持有的 log handle；前端輪詢新增 10 秒逾時取消。
 
 ## 檔案結構
 

@@ -53,19 +53,26 @@ def start_app() -> subprocess.Popen:
         # CREATE_NO_WINDOW: child 不開 console
         # CREATE_NEW_PROCESS_GROUP: 不繼承父的 console signal handler
         flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-    return subprocess.Popen(
-        [PYTHON_EXE, "-u", APP_PY],
-        cwd=BASE_DIR,
-        stdout=out_fh,
-        stderr=err_fh,
-        stdin=subprocess.DEVNULL,
-        creationflags=flags,
-    )
+    # Codex 2026-05-08 10:22 +08:00：Popen 建立後父行程關閉 log handle，避免 watchdog 常駐時多持有檔案描述。
+    try:
+        return subprocess.Popen(
+            [PYTHON_EXE, "-u", APP_PY],
+            cwd=BASE_DIR,
+            stdout=out_fh,
+            stderr=err_fh,
+            stdin=subprocess.DEVNULL,
+            creationflags=flags,
+        )
+    finally:
+        out_fh.close()
+        err_fh.close()
 
 
 def http_ok() -> bool:
     try:
         with urllib.request.urlopen(HEALTH_URL, timeout=5) as r:
+            # Codex 2026-05-08 10:22 +08:00：讀完整 body，避免健康檢查提早斷線造成 app 端 ConnectionAbortedError。
+            r.read()
             return 200 <= r.status < 300
     except Exception:
         return False

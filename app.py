@@ -15,7 +15,7 @@ import sqlite3
 import subprocess
 import threading
 from datetime import datetime
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
@@ -393,23 +393,39 @@ class Handler(SimpleHTTPRequestHandler):
         elif parsed.path == "/api/stores":
             self._json_response(STORES)
         elif parsed.path == "/" or parsed.path == "/index.html":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
             with open(os.path.join(BASE_DIR, "index.html"), "rb") as f:
-                self.wfile.write(f.read())
+                self._bytes_response(f.read(), "text/html; charset=utf-8")
         else:
             super().do_GET()
 
     def _json_response(self, obj):
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(json.dumps(obj, ensure_ascii=False).encode("utf-8"))
+        self._bytes_response(
+            json.dumps(obj, ensure_ascii=False).encode("utf-8"),
+            "application/json; charset=utf-8",
+            cors=True,
+        )
+
+    # Codex 2026-05-08 10:22 +08:00：常駐服務穩定性修補，client 斷線時避免 traceback 持續寫入 server.err.log。
+    def _bytes_response(self, payload, content_type, cors=False):
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(payload)))
+            if cors:
+                self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass
 
     def log_message(self, *args):
         pass
+
+
+# Codex 2026-05-08 10:22 +08:00：改用 threaded server，避免單一慢請求阻塞 watchdog 健康檢查。
+class LongRunningHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
 
 
 # ── 主程式 ────────────────────────────────────────
@@ -430,12 +446,14 @@ def main():
     t = threading.Thread(target=monitor_loop, daemon=True)
     t.start()
 
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
+    server = LongRunningHTTPServer(("0.0.0.0", PORT), Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n已停止", flush=True)
         server.shutdown()
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":
