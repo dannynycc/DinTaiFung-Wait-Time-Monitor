@@ -31,11 +31,15 @@ jobs:
 
       - name: 決定匯出日期
         id: pick
+        # 使用者輸入透過 env 傳入，不直接內插進 shell —— 直接寫 ${{ inputs.date }}
+        # 在 run: 區塊裡是標準的 GitHub Actions 指令注入模式。
+        env:
+          INPUT_DATE: ${{ inputs.date }}
         run: |
-          if [ -n "${{ inputs.date }}" ]; then
-            d="${{ inputs.date }}"
-          else
-            d=$(date -d 'yesterday' +%F)
+          d="${INPUT_DATE:-$(date -d 'yesterday' +%F)}"
+          if ! echo "$d" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+            echo "::error::日期格式不合法：$d"
+            exit 1
           fi
           echo "date=$d" >> "$GITHUB_OUTPUT"
           echo "匯出日期（台北）：$d"

@@ -507,9 +507,28 @@ function createEl(tag, text, className) {
   return el;
 }
 
-function heatClass(wt) {
+// ── wait_time 的型別 ─────────────────────────────
+// 官方 API 的 wait_time 不保證是數字，實測會回三種：
+//   '125'            數字字串
+//   '-1'             尚未營業
+//   '已停止內用取號'  當日已停止取號（中文字串）
+// 原本的程式只認得 '-1'，導致中文字串被當成數字處理：卡片出現
+// 「已停止內用取號 分鐘」、表格出現「已停止內用取號分」、
+// 圖表則直接把該事件丟掉、把最後一個數值一路延伸到現在（等於謊報）。
+function waitNumber(wt) {
+  if (wt === null || wt === undefined || wt === '' || wt === '-1') return null;
   const n = Number(wt);
-  if (isNaN(n) || wt === '-1') return 'idle';
+  return Number.isFinite(n) ? n : null;
+}
+
+function waitLabel(wt) {
+  if (wt === '-1') return '尚未營業';
+  return wt;   // 例如「已停止內用取號」，原樣顯示，不加單位
+}
+
+function heatClass(wt) {
+  const n = waitNumber(wt);
+  if (n === null) return 'idle';
   if (n >= 40) return 'hot';
   if (n >= 15) return 'warm';
   return 'cool';
@@ -591,7 +610,8 @@ function renderCards(latestList) {
   for (const r of latestList) {
     const name = r.store_name;
     const wt = r.wait_time;
-    const isClosed = wt === '-1';
+    const wn = waitNumber(wt);
+    const isClosed = wn === null;   // '-1' 與「已停止內用取號」都算
 
     const card = document.createElement('div');
     card.className = 'store-card ' + heatClass(wt);
@@ -606,11 +626,12 @@ function renderCards(latestList) {
 
     card.appendChild(createEl('div', name, 'name'));
     if (isClosed) {
+      // 非數值狀態不加「分鐘」單位，否則會出現「已停止內用取號 分鐘」
       const wrap = createEl('div', null, 'closed');
-      wrap.appendChild(createEl('span', '尚未營業', 'wait'));
+      wrap.appendChild(createEl('span', waitLabel(wt), 'wait'));
       card.appendChild(wrap);
     } else {
-      card.appendChild(createEl('span', wt, 'wait'));
+      card.appendChild(createEl('span', String(wn), 'wait'));
       card.appendChild(createEl('span', ' 分鐘', 'unit'));
     }
 
@@ -634,13 +655,26 @@ function renderCards(latestList) {
 // ── 把 changes 轉成 chart datasets（step line）───
 // 邏輯：每個 change event 是一個 (timestamp, wait_time)。
 // Chart.js 用 stepped:'before' → 線條會在 timestamp 時刻「跳」到新值。
-// 為了讓最後一段值有畫到「現在」，幫每店多補一個延伸點到當日最末。
+// 最後一段值要延伸到「現在」，但**只在該店仍在取號時**才延伸。
+//
+// 舊版把非數值事件（'-1'、「已停止內用取號」）整個 continue 掉，
+// 結果延伸邏輯拿最後一個數值一路畫到現在 —— 南西店 18:50 就停止取號，
+// 圖表卻宣稱它到 20:05 都還是 125 分鐘。那是謊報，不是缺漏。
+// 正確做法：非數值事件不畫成點，但要記下「線在此刻終止」。
 function buildChartDatasets(changes, dateStr) {
   const byStore = {};
+  const stoppedAt = {};   // store_name → 停止取號的時間戳
   for (const r of changes) {
-    if (r.wait_time === '-1' || isNaN(Number(r.wait_time))) continue;
+    const n = waitNumber(r.wait_time);
+    if (n === null) {
+      // 非數值 = 該店此刻起不再有有效候位時間，線到此為止
+      if (byStore[r.store_name]) stoppedAt[r.store_name] = r.timestamp;
+      continue;
+    }
+    // 若之前停過又恢復報數（跨營業時段），清掉終止標記
+    delete stoppedAt[r.store_name];
     if (!byStore[r.store_name]) byStore[r.store_name] = [];
-    byStore[r.store_name].push({ x: r.timestamp, y: Number(r.wait_time) });
+    byStore[r.store_name].push({ x: r.timestamp, y: n });
   }
 
   // 延伸線到當日最末（看歷史 = 當日 23:59:59；看今日 = 當下時間）
@@ -661,9 +695,11 @@ function buildChartDatasets(changes, dateStr) {
   const datasets = [];
   for (const name of showStores) {
     const pts = byStore[name].slice();
-    // 補延伸點：用最後一個值延到 tail
+    // 補延伸點。已停止取號的店只延到「停止的那一刻」，不延到現在 ——
+    // 否則圖表會宣稱一個早就停止取號的店還維持著最後那個候位時間。
     if (pts.length > 0) {
-      pts.push({ x: tailStr, y: pts[pts.length - 1].y });
+      const end = stoppedAt[name] || tailStr;
+      pts.push({ x: end, y: pts[pts.length - 1].y });
     }
     const color = storeColor(name);
     datasets.push({
@@ -697,7 +733,11 @@ function fmtDuration(min) {
 }
 
 function fmtChange(prev, next) {
-  const fmtVal = v => v === '-1' ? '未營業' : `${v}分`;
+  // 非數值狀態原樣顯示，不加「分」單位（否則會出現「已停止內用取號分」）
+  const fmtVal = (v) => {
+    const n = waitNumber(v);
+    return n === null ? waitLabel(v) : `${n}分`;
+  };
   if (prev === null || prev === undefined) return fmtVal(next);  // 起點
   return `${fmtVal(prev)} → ${fmtVal(next)}`;
 }
@@ -721,10 +761,9 @@ function renderTable() {
     tr.appendChild(createEl('td', r.timestamp));
     tr.appendChild(createEl('td', r.store_name));
 
-    // 變化欄：「-1 → 0」這種有顏色標示
-    const isOpening = r.prev_value === '-1' && r.wait_time !== '-1';
-    const isClosing = r.wait_time === '-1';
-    const cls = isOpening ? 'td-wait' : (isClosing ? 'td-closed' : 'td-wait');
+    // 變化欄：轉入非數值狀態（未營業／已停止取號）用淡色標示
+    const isClosing = waitNumber(r.wait_time) === null;
+    const cls = isClosing ? 'td-closed' : 'td-wait';
     tr.appendChild(createEl('td', fmtChange(r.prev_value, r.wait_time), cls));
 
     tr.appendChild(createEl('td', fmtDuration(r.duration_min)));
@@ -737,9 +776,26 @@ function renderTable() {
     totalCount > MAX_TABLE_ROWS
       ? `${totalCount} 個變化（顯示最新 ${MAX_TABLE_ROWS}）`
       : `${totalCount} 個變化`;
-  const n = taipeiNow();
-  document.getElementById('lastUpdate').textContent =
-    taipeiClock(n) + ':' + String(n.getUTCSeconds()).padStart(2, '0') + '（台北）';
+}
+
+// 「上次更新」要顯示**資料的**時間，不是瀏覽器的時鐘。
+// 抓取只跑台北 09:00-23:59，深夜看板顯示的是昨晚最後一筆；
+// 若寫成當下時間，等於宣稱資料是剛抓的 —— 那是謊報。
+function renderFreshness(latestList) {
+  const el = document.getElementById('lastUpdate');
+  if (!latestList.length) { el.textContent = '無資料'; return; }
+  const ts = latestList.map(r => r.timestamp).sort().pop();
+  const ageMin = Math.floor(
+    (taipeiNow().getTime() - Date.parse(ts.replace(' ', 'T') + 'Z')) / 60000
+  );
+  let suffix = '';
+  if (ageMin >= 60) {
+    const h = Math.floor(ageMin / 60);
+    suffix = `（${h} 小時前，非抓取時段）`;
+  } else if (ageMin >= 3) {
+    suffix = `（${ageMin} 分鐘前）`;
+  }
+  el.textContent = ts.slice(11, 16) + ' 台北 ' + suffix;
 }
 
 // ── 主渲染 ──────────────────────────────────────
@@ -754,6 +810,7 @@ function render(changesRows, latestList) {
   renderCards(latestList);
   renderChart();
   renderTable();
+  renderFreshness(latestList);
 }
 
 // ── 定時拉資料 ──────────────────────────────────

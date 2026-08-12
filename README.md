@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v3.1-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v3.2-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-08-12 18:44 +08:00（每日 roll-up：raw 轉事件流，D1 年限 1.6 年 → 20 年）
+> 最後更新：2026-08-12 20:17 +08:00（通盤 code review：修正圖表謊報已停止取號、深夜整頁空白等 6 項）
 
 ## 兩種跑法
 

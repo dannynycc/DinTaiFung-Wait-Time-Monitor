@@ -36,6 +36,7 @@ const FETCH_TIMEOUT_MS = 15000;
 // raw 保留天數。1 = 只留今天（一天結束就 roll-up）。
 // 用 2 是刻意留一天安全邊際：roll-up 是不可逆的，多留一天讓錯誤有機會被發現。
 const RAW_RETENTION_DAYS = 2;
+const HEALTH_RETENTION_DAYS = 14; // fetch_health 每天 900 筆，不修剪一年就 32 萬筆
 const ROLLUP_AT = '09:02';        // 台北時間；cron 視窗 09:00-23:59，這是每天最早能跑的時機
 
 // ── 時間 ──────────────────────────────────────────
@@ -291,10 +292,16 @@ async function rollupRawLog(env) {
     FROM wait_log WHERE timestamp < ?
     GROUP BY substr(timestamp,1,10), store_id`;
 
+  // fetch_health 也要修剪。它每個 cron 週期寫一筆 = 每天 900 筆、一年 328,500 筆，
+  // 而 roll-up 原本只處理 wait_log，等於漏掉一張會無限成長的表。
+  // 保留 14 天：足以回溯查「上週某天為什麼有空洞」，又不會累積。
+  const healthCutoff = daysAgoTaipei(HEALTH_RETENTION_DAYS);
+
   await env.DB.batch([
     env.DB.prepare(stopSql).bind(cutoff),
     env.DB.prepare(summarySql).bind(cutoff),
     env.DB.prepare('DELETE FROM wait_log WHERE timestamp < ?').bind(cutoff),
+    env.DB.prepare('DELETE FROM fetch_health WHERE timestamp < ?').bind(healthCutoff),
   ]);
 
   console.log(`rollup done, cutoff=${cutoff}`);
@@ -325,26 +332,34 @@ async function handleApi(url, env) {
   if (path === '/api/latest') {
     // SQLite 特性：使用 MAX() 聚合時，同一列的其他裸欄位保證取自 MAX 命中的那一列。
     // 因此這一句就能取得每店最新快照，不需要相關子查詢。
-    // 限定近 6 小時是為了讓查詢只掃索引尾端，資料長大後也不會變慢。
-    const since = taipeiTimestamp(new Date(Date.now() - 6 * 3600 * 1000));
+    //
+    // 視窗錨定在「資料最後一筆」而不是「現在」。
+    // 原本寫成「現在往前 6 小時」，但 cron 只跑台北 09:00-23:59，
+    // 每天午夜過後最後一筆資料就超過 6 小時 → 回空陣列 → 整頁卡片消失，
+    // 每天 00:00-09:06 共 9 小時都是空白。錨定在資料上就不受抓取視窗影響。
     const { results } = await env.DB.prepare(`
       SELECT store_id, store_name, wait_time, num_1, num_2, num_3, num_4,
              togo_numbers, last_time, MAX(timestamp) AS timestamp
-      FROM wait_log WHERE timestamp >= ?
+      FROM wait_log
+      WHERE timestamp >= (SELECT datetime(MAX(timestamp), '-6 hours') FROM wait_log)
       GROUP BY store_id ORDER BY store_id
-    `).bind(since).all();
+    `).all();
     return json(results ?? []);
   }
 
   if (path === '/api/changes') {
     const date = url.searchParams.get('date') || taipeiDateString();
     if (!DATE_RE.test(date)) return json({ error: 'bad date' }, 400);
+    // 上界用「隔日 00:00:00」而非「當日 23:59:59」：後者會漏掉正好落在
+    // 23:59:59 的事件。本機 app.py 用的就是隔日 00:00:00，這是搬移時改壞的。
+    const next = new Date(Date.parse(`${date}T00:00:00Z`) + 86400000)
+      .toISOString().slice(0, 10);
     const { results } = await env.DB.prepare(`
       SELECT timestamp, store_id, store_name, wait_time, prev_value, duration_min
       FROM wait_changes
       WHERE timestamp >= ? AND timestamp < ?
       ORDER BY timestamp ASC, store_id ASC
-    `).bind(`${date} 00:00:00`, `${date} 23:59:59`).all();
+    `).bind(`${date} 00:00:00`, `${next} 00:00:00`).all();
     return json(results ?? []);
   }
 

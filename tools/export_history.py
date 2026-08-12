@@ -14,6 +14,7 @@
   python tools/export_history.py            # 匯出全部日期
   python tools/export_history.py 2026-05-01 # 只匯出指定日期
 """
+import datetime
 import io
 import json
 import os
@@ -46,11 +47,13 @@ def export(only_date=None):
 
     written = []
     for d in dates:
+        # 上界用隔日 00:00:00 而非當日 23:59:59，後者會漏掉正好落在 23:59:59 的事件
+        nxt = (datetime.date.fromisoformat(d) + datetime.timedelta(days=1)).isoformat()
         rows = [dict(r) for r in conn.execute(
             f"""SELECT {','.join(COLUMNS)} FROM wait_changes
                 WHERE timestamp >= ? AND timestamp < ?
                 ORDER BY timestamp ASC, store_id ASC""",
-            (f"{d} 00:00:00", f"{d} 23:59:59"),
+            (f"{d} 00:00:00", f"{nxt} 00:00:00"),
         )]
         path = os.path.join(DATA_DIR, f"{d}.json")
         with open(path, "w", encoding="utf-8") as f:
