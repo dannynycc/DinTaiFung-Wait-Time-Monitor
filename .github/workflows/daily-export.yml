@@ -14,6 +14,11 @@ on:
         description: '指定匯出日期 YYYY-MM-DD（留空 = 前一日）'
         required: false
         type: string
+      force:
+        description: '允許用比現有檔案更少的資料覆蓋（僅在確知現有檔案有誤時勾選）'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -69,6 +74,32 @@ jobs:
         run: |
           echo "::warning::${{ steps.pick.outputs.date }} 沒有任何變化事件，跳過寫入。"
           echo "後續的健康度檢查會判斷這是 cron 中斷還是該日確實無資料。"
+
+      # 暴跌守門。實際事故：2026-08-12 傍晚 17:51 手動觸發測試，把當天只累積到
+      # 一半的 43 筆寫進 repo，覆蓋掉原本會有的 225 筆。該日隔天變成歷史日後，
+      # 前端優先讀靜態檔，等於 81% 的資料在畫面上消失 —— 而 workflow 全綠。
+      # 「比現有檔案少」永遠是可疑的：正常情況只會愈補愈多。
+      - name: 資料量暴跌就中止（寧可不更新，也不要覆蓋成殘缺）
+        if: steps.fetch.outputs.count != '0'
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          d="${{ steps.pick.outputs.date }}"
+          f="docs/data/$d.json"
+          [ -f "$f" ] || { echo "尚無既有檔案，直接寫入"; exit 0; }
+          old=$(python3 -c "import json;print(len(json.load(open('$f'))))")
+          new="${{ steps.fetch.outputs.count }}"
+          echo "既有 $old 筆 / 這次取得 $new 筆"
+          if [ "$new" -lt "$old" ]; then
+            if [ "$FORCE" = "true" ]; then
+              echo "::warning::新資料($new)少於既有($old)，但已勾選 force，仍照常覆蓋。"
+            else
+              echo "::error::新資料($new 筆)少於既有檔案($old 筆) —— 拒絕覆蓋。"
+              echo "常見原因：在當日尚未結束時手動觸發匯出。"
+              echo "若確知既有檔案有誤，重新以 force=true 觸發。"
+              exit 1
+            fi
+          fi
 
       - name: 寫入 docs/data 並重建索引
         if: steps.fetch.outputs.count != '0'
