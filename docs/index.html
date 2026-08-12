@@ -653,6 +653,22 @@ function stopTimeHeat(unixTs) {
   return '';
 }
 
+// 卡片 hover → 對應的線加粗、其餘變淡。
+// 與圖表內 hover 走同一條 scheduleHighlight()，所以兩種進入方式的視覺一致，
+// 也共用 rAF 合併與「只改元素樣式 + render()」的低成本重繪路徑。
+function hoverStoreFromCard(name) {
+  if (!chart) return;
+  const idx = name === null
+    ? -1
+    : chart.data.datasets.findIndex(ds => ds.label === name);
+  scheduleHighlight(chart, idx);
+}
+
+function attachCardHover(card, name) {
+  card.addEventListener('mouseenter', () => hoverStoreFromCard(name));
+  card.addEventListener('mouseleave', () => hoverStoreFromCard(null));
+}
+
 // ── 渲染：卡片（用 /api/latest 給每店「現在」的值）───
 // 以 allStores（來自 /api/stores 的權威清單）為基準逐店渲染，而不是只跑
 // latestList。原因：某店若連續抓取失敗超過查詢視窗，它會從 /api/latest 消失，
@@ -676,6 +692,7 @@ function renderCards(latestList) {
       card.className = 'store-card idle';
       card.dataset.store = name;
       card.addEventListener('click', () => setFilter(selectedStore === name ? '__all__' : name));
+      attachCardHover(card, name);
       card.appendChild(createEl('div', name, 'name'));
       const wrap = createEl('div', null, 'closed');
       wrap.appendChild(createEl('span', '資料中斷', 'wait'));
@@ -698,6 +715,7 @@ function renderCards(latestList) {
     card.addEventListener('click', () => {
       setFilter(selectedStore === name ? '__all__' : name);
     });
+    attachCardHover(card, name);
 
     card.appendChild(createEl('div', name, 'name'));
     if (isClosed) {
@@ -809,8 +827,34 @@ function buildChartDatasets(changes, dateStr) {
   return datasets;
 }
 
+// 由分鐘數產生 'HH:MM:SS'，讓軸範圍與抓取視窗共用同一組常數，不會各改各的
+function minToClock(m) {
+  return String(Math.floor(m / 60)).padStart(2, '0') + ':' +
+         String(m % 60).padStart(2, '0') + ':00';
+}
+
+// 時間軸範圍。
+// 兩個原則：
+//   1. 用「當日全部分店」的資料計算，不用篩選後的子集 —— 否則點某一家店，
+//      時間軸會縮成那家店自己的範圍（例如只到 19:30），跟全部分店的視圖對不起來。
+//   2. 下限固定為抓取視窗 09:00–21:30，即使當天資料還沒填滿也一樣，
+//      這樣每天的圖橫向尺度一致、可以直接比較。
+//      但真實資料若超出這個範圍（例如本機 24 小時收集的歷史日），以資料為準 ——
+//      為了「好看」把真的存在的紀錄裁掉，就是拿呈現去騙資料。
+function applyAxisRange() {
+  let min = `${selectedDate} ${minToClock(FETCH_WINDOW_START_MIN)}`;
+  let max = `${selectedDate} ${minToClock(FETCH_WINDOW_END_MIN)}`;
+  for (const r of allRows) {
+    if (r.timestamp < min) min = r.timestamp;
+    if (r.timestamp > max) max = r.timestamp;
+  }
+  chart.options.scales.x.min = min;
+  chart.options.scales.x.max = max;
+}
+
 function renderChart() {
   chart.data.datasets = buildChartDatasets(allRows, selectedDate);
+  applyAxisRange();
   chart.update('none');
   // update() 會依 dataset 設定重新解析元素樣式，等於把 hover 高亮沖掉。
   // 歸零記錄，讓下一次滑鼠移動重新套用，否則會卡在「以為還在高亮」的狀態。

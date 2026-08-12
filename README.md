@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v3.6-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v3.7-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-08-12 22:21 +08:00（圖表 hover 卡頓修正：JS 時間 −75%；抓取時段改為 09:00–21:30）
+> 最後更新：2026-08-12 22:44 +08:00（卡片 hover 連動圖表；時間軸固定 09:00–21:30 不隨篩選改變）
 
 ## 兩種跑法
 

@@ -622,6 +622,18 @@ function stopTimeHeat(unixTs) {
   return '';
 }
 
+// 卡片 hover → 對應的線加粗、其餘變淡（與圖表內 hover 走同一條低成本路徑）
+function hoverStoreFromCard(name) {
+  if (!chart) return;
+  const idx = name === null ? -1 : chart.data.datasets.findIndex(ds => ds.label === name);
+  scheduleHighlight(chart, idx);
+}
+
+function attachCardHover(card, name) {
+  card.addEventListener('mouseenter', () => hoverStoreFromCard(name));
+  card.addEventListener('mouseleave', () => hoverStoreFromCard(null));
+}
+
 // ── 渲染：卡片（用 /api/latest 給每店「現在」的值）───
 function renderCards(latestList) {
   const overview = document.getElementById('overview');
@@ -646,6 +658,7 @@ function renderCards(latestList) {
     card.addEventListener('click', () => {
       setFilter(selectedStore === name ? '__all__' : name);
     });
+    attachCardHover(card, name);
 
     card.appendChild(createEl('div', name, 'name'));
     if (isClosed) {
@@ -734,8 +747,22 @@ function buildChartDatasets(changes, dateStr) {
   return datasets;
 }
 
+// 時間軸範圍用「當日全部分店」的資料計算，不用篩選後的子集 —— 否則點某一家店，
+// 時間軸會縮成那家店自己的範圍，跟全部分店的視圖對不起來。
+// 本機版不套用 09:00–21:30 的下限：app.py 是 24 小時收集，套雲端的抓取視窗會裁掉真資料。
+function applyAxisRange() {
+  let min = null, max = null;
+  for (const r of allRows) {
+    if (min === null || r.timestamp < min) min = r.timestamp;
+    if (max === null || r.timestamp > max) max = r.timestamp;
+  }
+  chart.options.scales.x.min = min ?? undefined;
+  chart.options.scales.x.max = max ?? undefined;
+}
+
 function renderChart() {
   chart.data.datasets = buildChartDatasets(allRows, selectedDate);
+  applyAxisRange();
   chart.update('none');
   // update() 會重新解析元素樣式，等於沖掉 hover 高亮 —— 歸零讓下次滑動重新套用
   lastHoveredIdx = -1;
