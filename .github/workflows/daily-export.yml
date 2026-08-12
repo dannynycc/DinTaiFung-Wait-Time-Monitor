@@ -127,10 +127,13 @@ jobs:
           for r in bad[:5]:
               print(f"  {r['timestamp']} ok={r['ok_count']} fail={r['fail_count']} {r['note']}")
 
-          # 台北 03:00 執行時，最近一次抓取應是昨晚 23:59 前後（約 3 小時前）。
-          # 超過 5 小時代表昨天提早斷線了。
-          if age_min > 300:
-              print(f'::error::最近一次抓取在 {age_min:.0f} 分鐘前，遠超預期 —— cron 可能已中斷')
+          # 本 workflow 在台北 03:00 執行，抓取視窗收在 21:30，
+          # 所以正常情況下最近一次抓取就是 5.5 小時前（330 分鐘）—— 這是預期值不是異常。
+          # 門檻取 420 分鐘：代表昨天比預定時間提早 1.5 小時以上斷線才告警。
+          # （抓取視窗若再調整，這個數字要跟著改，否則不是每天誤報就是永遠不報。）
+          STALE_LIMIT_MIN = 420
+          if age_min > STALE_LIMIT_MIN:
+              print(f'::error::最近一次抓取在 {age_min:.0f} 分鐘前（門檻 {STALE_LIMIT_MIN}）—— cron 可能提早中斷')
               sys.exit(1)
           if os.environ.get('COUNT') == '0':
               print('::error::前一日沒有任何變化事件，但 cron 有在跑 —— 請人工確認')

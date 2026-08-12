@@ -404,12 +404,54 @@ function dateLabel(dateStr) {
 }
 
 // ── Chart.js（含 hover 高亮 plugin）──────────────
-let lastHoveredIdx = -1;  // 記住上次 hover 的 dataset，避免重複 update
+//
+// 效能：這段原本用 `chart.update('none')` 重繪，實測每次 6.54 ms，
+// 而 interaction 是 { intersect: false, mode: 'nearest' } —— 滑鼠一移動，
+// 「最近的資料集」就在 11 條線之間跳，導致幾乎每兩次 mousemove 就全圖重繪一次。
+// 掃過圖表一次量到 240 次 update、合計 1722 ms 主執行緒，游標因此明顯鈍。
+//
+// 改法：只改「元素」的 options 再呼叫 chart.render()（只重畫、不重算資料與比例尺）。
+// A/B 實測 6.54 ms → 0.47 ms，快約 14 倍。順帶用 rAF 合併同一幀內的多次事件。
+// （另外實測 getElementsAtEventForMode 只花 0.02 ms，偵測從來不是瓶頸 ——
+//   憑直覺去優化偵測會完全白做工。）
+let lastHoveredIdx = -1;
+let pendingHoverIdx = -1;
+let hoverRafId = 0;
+
+function paintHighlight(chart, activeIdx) {
+  chart.data.datasets.forEach((ds, i) => {
+    const meta = chart.getDatasetMeta(i);
+    const base = storeColor(ds.label);
+    const isActive = i === activeIdx;
+    const width = activeIdx === -1 ? 2 : (isActive ? 4.5 : 1);
+    const radius = activeIdx === -1 ? 2.5 : (isActive ? 4.5 : 1.5);
+    const color = (activeIdx !== -1 && !isActive) ? base + '40' : base;
+    if (meta.dataset) {
+      meta.dataset.options.borderWidth = width;
+      meta.dataset.options.borderColor = color;
+    }
+    for (const pt of meta.data) pt.options.radius = radius;
+  });
+  chart.render();
+}
+
+function scheduleHighlight(chart, idx) {
+  if (idx === lastHoveredIdx) return;
+  pendingHoverIdx = idx;
+  if (hoverRafId) return;                 // 同一幀內的後續事件併入這次
+  hoverRafId = requestAnimationFrame(() => {
+    hoverRafId = 0;
+    if (pendingHoverIdx === lastHoveredIdx) return;
+    lastHoveredIdx = pendingHoverIdx;
+    paintHighlight(chart, pendingHoverIdx);
+  });
+}
 
 const highlightPlugin = {
   id: 'legendHover',
   beforeEvent(chart, args) {
     const evt = args.event;
+    if (evt.type === 'mouseout') { scheduleHighlight(chart, -1); return; }
     if (evt.type !== 'mousemove') return;
 
     // 偵測線條 hover
@@ -431,26 +473,7 @@ const highlightPlugin = {
       }
     }
 
-    // 只有 hover 目標改變時才重繪
-    if (activeIdx === lastHoveredIdx) return;
-    lastHoveredIdx = activeIdx;
-
-    chart.data.datasets.forEach((ds, i) => {
-      if (activeIdx === -1) {
-        ds.borderWidth = 2;
-        ds.pointRadius = 2.5;
-        ds.borderColor = storeColor(ds.label);
-      } else if (i === activeIdx) {
-        ds.borderWidth = 4.5;
-        ds.pointRadius = 4.5;
-        ds.borderColor = storeColor(ds.label);
-      } else {
-        ds.borderWidth = 1;
-        ds.pointRadius = 1.5;
-        ds.borderColor = storeColor(ds.label) + '40';
-      }
-    });
-    chart.update('none');
+    scheduleHighlight(chart, activeIdx);
   }
 };
 
@@ -789,6 +812,9 @@ function buildChartDatasets(changes, dateStr) {
 function renderChart() {
   chart.data.datasets = buildChartDatasets(allRows, selectedDate);
   chart.update('none');
+  // update() 會依 dataset 設定重新解析元素樣式，等於把 hover 高亮沖掉。
+  // 歸零記錄，讓下一次滑鼠移動重新套用，否則會卡在「以為還在高亮」的狀態。
+  lastHoveredIdx = -1;
 }
 
 // ── 渲染：表格（transition log）─────────────────
@@ -848,11 +874,13 @@ function renderTable() {
 }
 
 // 「上次更新」要顯示**資料的**時間，不是瀏覽器的時鐘。
-// 抓取只跑台北 09:00-23:59，深夜看板顯示的是昨晚最後一筆；
+// 抓取只跑台北 09:00-21:30，非抓取時段看板顯示的是當天最後一筆；
 // 若寫成當下時間，等於宣稱資料是剛抓的 —— 那是謊報。
-// 抓取視窗（台北時間）。與 Worker 的 cron `* 1-15 * * *`（UTC）一致。
-const FETCH_WINDOW_START_HOUR = 9;
-const FETCH_WINDOW_END_HOUR = 24;
+// 抓取視窗（台北時間），必須與 worker/wrangler.toml 的 cron 一致：
+//   "* 1-12 * * *" + "0-30 13 * * *"（UTC）= 台北 09:00–21:30
+// 用「分鐘數」而非整點，因為結束時間是 21:30 不是整點。
+const FETCH_WINDOW_START_MIN = 9 * 60;         // 09:00
+const FETCH_WINDOW_END_MIN = 21 * 60 + 30;     // 21:30
 
 function renderFreshness(latestList) {
   const el = document.getElementById('lastUpdate');
@@ -865,8 +893,9 @@ function renderFreshness(latestList) {
   // 「非抓取時段」必須依**當下是否真的在視窗外**判斷，不能用「超過 1 小時」推測。
   // 舊寫法會把下午的斷線標成「非抓取時段」，等於安慰使用者說這是正常排程休息 ——
   // 那是在製造假的安心感，比不顯示還糟。
-  const hour = taipeiNow().getUTCHours();
-  const outsideWindow = hour < FETCH_WINDOW_START_HOUR || hour >= FETCH_WINDOW_END_HOUR;
+  const n = taipeiNow();
+  const mins = n.getUTCHours() * 60 + n.getUTCMinutes();
+  const outsideWindow = mins < FETCH_WINDOW_START_MIN || mins > FETCH_WINDOW_END_MIN;
 
   let suffix = '';
   if (ageMin >= 5) {

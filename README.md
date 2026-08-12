@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v3.5-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v3.6-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-08-12 21:42 +08:00（桌機版分店卡片強制排成一列）
+> 最後更新：2026-08-12 22:21 +08:00（圖表 hover 卡頓修正：JS 時間 −75%；抓取時段改為 09:00–21:30）
 
 ## 兩種跑法
 
@@ -15,14 +15,14 @@
 | 抓取 | `app.py`（電腦要開著） | Cloudflare Worker cron |
 | 儲存 | 本機 `wait_log.db` | Cloudflare D1 |
 | 前端 | `index.html`（localhost:5678） | `docs/`（GitHub Pages） |
-| 抓取時段 | 24 小時 | 台北 09:00–23:59 |
+| 抓取時段 | 24 小時 | 台北 09:00–21:30 |
 
 兩者互不干擾，可並存。本文件先講雲端版，本機版說明在後半。
 
 ## 雲端架構
 
 ```
-Cloudflare Worker  (cron 每分鐘，台北 09:00-23:59)
+Cloudflare Worker  (cron 每分鐘，台北 09:00-21:30)
       │  併發 11 次 POST 鼎泰豐 API
       ▼
    Cloudflare D1  (SQLite)

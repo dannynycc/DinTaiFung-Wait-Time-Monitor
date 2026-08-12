@@ -37,9 +37,9 @@ const FETCH_TIMEOUT_MS = 15000;
 //   N=1 → 昨天+今天（2 天）    N=2 → 前天+昨天+今天（3 天）
 // 用 2 是刻意留安全邊際：roll-up 不可逆，多留一天讓錯誤有機會被發現。
 const RAW_RETENTION_DAYS = 2;
-const HEALTH_RETENTION_DAYS = 14; // fetch_health 每天 900 筆，不修剪一年就 32 萬筆
+const HEALTH_RETENTION_DAYS = 14; // fetch_health 每天 751 筆，不修剪一年就 27 萬筆
 
-// roll-up 觸發窗（台北時間）。cron 視窗是 09:00-23:59，這是每天最早的時機。
+// roll-up 觸發窗（台北時間）。cron 視窗是 09:00-21:30，這是每天最早的時機。
 // 用「一段窗」而非單一分鐘：Cloudflare cron 是 best-effort，單一分鐘被延遲或
 // 丟棄就整天不跑；而該分鐘的 cycle 若全店抓取失敗或寫入失敗也會提前 return/throw。
 // roll-up 本身是冪等的（第一次跑完就沒有 < cutoff 的列了，後續都是 no-op），
@@ -330,7 +330,7 @@ async function rollupRawLog(env) {
     FROM wait_log WHERE timestamp < ?
     GROUP BY substr(timestamp,1,10), store_id`;
 
-  // fetch_health 也要修剪。它每個 cron 週期寫一筆 = 每天 900 筆、一年 328,500 筆，
+  // fetch_health 也要修剪。它每個 cron 週期寫一筆 = 每天 751 筆、一年 27 萬筆，
   // 而 roll-up 原本只處理 wait_log，等於漏掉一張會無限成長的表。
   // 保留 14 天：足以回溯查「上週某天為什麼有空洞」，又不會累積。
   const healthCutoff = daysAgoTaipei(HEALTH_RETENTION_DAYS);
@@ -381,7 +381,7 @@ async function handleApi(url, env) {
     // 因此這一句就能取得每店最新快照，不需要相關子查詢。
     //
     // 視窗錨定在「資料最後一筆」而不是「現在」。
-    // 原本寫成「現在往前 6 小時」，但 cron 只跑台北 09:00-23:59，
+    // 原本寫成「現在往前 6 小時」，但 cron 只跑台北 09:00-21:30，
     // 每天午夜過後最後一筆資料就超過 6 小時 → 回空陣列 → 整頁卡片消失，
     // 每天 00:00-09:06 共 9 小時都是空白。錨定在資料上就不受抓取視窗影響。
     const { results } = await env.DB.prepare(`
