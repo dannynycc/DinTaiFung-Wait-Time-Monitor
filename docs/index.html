@@ -419,12 +419,13 @@ let pendingHoverIdx = -1;
 let hoverRafId = 0;
 
 function paintHighlight(chart, activeIdx) {
+  const singleStore = chart.data.datasets.length === 1;
   chart.data.datasets.forEach((ds, i) => {
     const meta = chart.getDatasetMeta(i);
     const base = storeColor(ds.label);
     const isActive = i === activeIdx;
     const width = activeIdx === -1 ? 2 : (isActive ? 4.5 : 1);
-    const radius = activeIdx === -1 ? 2.5 : (isActive ? 4.5 : 1.5);
+    const radius = hoverPointRadius(isActive, activeIdx, singleStore);
     const color = (activeIdx !== -1 && !isActive) ? base + '40' : base;
     if (meta.dataset) {
       meta.dataset.options.borderWidth = width;
@@ -812,19 +813,34 @@ function buildChartDatasets(changes, dateStr) {
       if (end) pts.push({ x: end, y: pts[pts.length - 1].y });
     }
     const color = storeColor(name);
+    const single = showStores.length === 1;
     datasets.push({
       label: name,
       data: pts,
       borderColor: color,
       backgroundColor: color + '20',
       borderWidth: 2,
-      pointRadius: 3,
+      // 全部分店時不畫點。整天的資料是 11 條線、600 多個變化事件 ——
+      // 每個事件都畫一個圓點會蓋掉線條本身，看不出趨勢（實測 2026-05-17
+      // 這天 626 個點）。步階線的轉折本來就標示了變化時刻，點是多餘的。
+      // 篩選單店時才畫點，因為那時每個點都看得清楚、也才有意義。
+      pointRadius: single ? 3 : 0,
+      // 點雖然不畫，滑到附近仍會浮出來，tooltip 的定位也不受影響
+      pointHoverRadius: single ? 5 : 4,
       pointBackgroundColor: color,
       stepped: 'before',  // 步階線：橫線維持到下個變化點才跳
-      fill: showStores.length === 1,
+      fill: single,
     });
   }
   return datasets;
+}
+
+// hover 高亮時，被指到的那條線把點顯示出來，其餘維持不畫。
+// 沒有這個的話，多分店檢視下高亮只能靠線條粗細與顏色深淺區分，
+// 線一多就不夠明顯。
+function hoverPointRadius(isActive, activeIdx, singleStore) {
+  if (activeIdx === -1) return singleStore ? 3 : 0;   // 無 hover：回到預設
+  return isActive ? 4 : 0;
 }
 
 // 由分鐘數產生 'HH:MM:SS'，讓軸範圍與抓取視窗共用同一組常數，不會各改各的
@@ -853,6 +869,13 @@ function applyAxisRange() {
 }
 
 function renderChart() {
+  // 取消還沒執行的 hover 重繪。它帶的是「改版前」的 dataset 索引：
+  // 點卡片會同時觸發 mouseenter（記下該店在 11 條線中的索引）與 click（篩成 1 條線），
+  // 等 rAF 執行時舊索引已不存在，唯一那條線會被判定為「非高亮」而整條淡化、不顯示點。
+  // 非同步排程的典型陷阱 —— 排程當下的世界跟執行當下的世界不是同一個。
+  if (hoverRafId) { cancelAnimationFrame(hoverRafId); hoverRafId = 0; }
+  pendingHoverIdx = -1;
+
   chart.data.datasets = buildChartDatasets(allRows, selectedDate);
   applyAxisRange();
   chart.update('none');

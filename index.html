@@ -761,6 +761,12 @@ function applyAxisRange() {
 }
 
 function renderChart() {
+  // 取消還沒執行的 hover 重繪：它帶的是改版前的 dataset 索引，
+  // 點卡片時 mouseenter 與 click 同時發生，等 rAF 執行時舊索引已不存在，
+  // 會讓篩選後唯一那條線被誤判為「非高亮」而整條淡化。
+  if (hoverRafId) { cancelAnimationFrame(hoverRafId); hoverRafId = 0; }
+  pendingHoverIdx = -1;
+
   chart.data.datasets = buildChartDatasets(allRows, selectedDate);
   applyAxisRange();
   chart.update('none');
