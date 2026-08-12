@@ -19,21 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Note on data / 資料說明
-
-This license covers the source code in this repository only.
-
-The wait-time records under `docs/data/` are factual observations collected
-from DinTaiFung's publicly accessible queue endpoint. This project does not
-own, and makes no copyright claim over, those underlying facts. They are
-published here for reference and may be used freely; attribution is
-appreciated but not required.
-
-本授權僅涵蓋本 repo 的原始碼。
-
-`docs/data/` 下的候位紀錄是自鼎泰豐官方公開候位查詢端點蒐集的事實觀測。
-本專案不擁有、亦不主張該等事實的著作權，資料公開供參考使用，
-歡迎自由取用，標示來源不強制但歡迎。
