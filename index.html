@@ -169,6 +169,24 @@
     font-size: 11px;
   }
 
+  /* ── 桌機：全部分店強制排成一列 ──────────────────
+     原本 repeat(auto-fill, minmax(130px, 1fr)) 只保證「塞得下幾欄就排幾欄」，
+     1600px 剛好 11 欄、1440px 只有 9 欄就換行。改成明確指定欄數。
+     字級用容器單位 cqw 而非 vw：卡片寬度會隨視窗一起縮，用 vw 比例固定，
+     永遠差零點幾 px 而讓「已停止內用取號」擠成兩行。 */
+  @media (min-width: 1160px) {
+    .overview {
+      grid-template-columns: repeat(var(--store-count, 11), minmax(0, 1fr));
+      gap: 8px;
+    }
+    .store-card {
+      padding: 14px 6px;
+      container-type: inline-size;
+    }
+    .store-card .closed .wait { font-size: clamp(9px, 13cqw, 14px); }
+    .store-card .stop-time { font-size: clamp(8px, 10cqw, 11px); }
+  }
+
   /* ── 平板 (≤ 900px) ─────────────────────────── */
   @media (max-width: 900px) {
     body { padding: 14px 14px; }
@@ -588,6 +606,9 @@ function stopTimeHeat(unixTs) {
 function renderCards(latestList) {
   const overview = document.getElementById('overview');
   overview.replaceChildren();
+
+  // 桌機版靠這個變數把 grid 欄數釘成分店數，確保排成一列
+  overview.style.setProperty('--store-count', String(latestList.length));
 
   for (const r of latestList) {
     const name = r.store_name;

@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v3.3-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v3.5-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-08-12 21:25 +08:00（授權釐清：程式碼 MIT + 補上 LICENSE 檔，資料不主張著作權）
+> 最後更新：2026-08-12 21:42 +08:00（桌機版分店卡片強制排成一列）
 
 ## 兩種跑法
 

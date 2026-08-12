@@ -169,6 +169,29 @@
     font-size: 11px;
   }
 
+  /* ── 桌機：全部分店強制排成一列 ──────────────────
+     原本用 repeat(auto-fill, minmax(130px, 1fr))，auto-fill 只保證「塞得下幾欄
+     就排幾欄」，1600px 剛好 11 欄、1440px 只有 9 欄就換行。改成明確指定欄數。
+     --store-count 由 JS 依實際卡片數寫入，分店增減時不必改 CSS。
+     欄變窄後內容也要跟著縮：實測最寬的一段文字是「已停止內用取號」98px @14px，
+     1428px 視埠下每張卡內容區僅約 94px，不縮字會擠成兩行、卡片跟著變高。 */
+  @media (min-width: 1160px) {
+    .overview {
+      grid-template-columns: repeat(var(--store-count, 11), minmax(0, 1fr));
+      gap: 8px;
+    }
+    /* 字級用容器單位（cqw）而非 vw：卡片寬度會隨視窗一起縮，用 vw 的話比例固定，
+       永遠差那零點幾 px 而換行（實測 1280px 時需要 89.6px、只有 89px 可用）。
+       cqw 跟的是卡片自身寬度，gap 或 padding 之後再調也不會失準。
+       13cqw 的來源：「已停止內用取號」7 個字，7 × 13% ≈ 91% 容器寬，留 9% 餘裕。 */
+    .store-card {
+      padding: 14px 6px;
+      container-type: inline-size;
+    }
+    .store-card .closed .wait { font-size: clamp(9px, 13cqw, 14px); }
+    .store-card .stop-time { font-size: clamp(8px, 10cqw, 11px); }
+  }
+
   /* ── 平板 (≤ 900px) ─────────────────────────── */
   @media (max-width: 900px) {
     body { padding: 14px 14px; }
@@ -618,6 +641,10 @@ function renderCards(latestList) {
 
   const byName = new Map(latestList.map(r => [r.store_name, r]));
   const roster = allStores.length ? allStores : latestList.map(r => r.store_name);
+
+  // 桌機版靠這個變數把 grid 欄數釘成分店數，確保排成一列。
+  // 用實際數量而非寫死 11，將來增減分店不必改 CSS。
+  overview.style.setProperty('--store-count', String(roster.length));
 
   for (const name of roster) {
     const r = byName.get(name);
