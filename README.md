@@ -4,9 +4,11 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v3.2-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v3.3-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-08-12 20:17 +08:00（通盤 code review：修正圖表謊報已停止取號、深夜整頁空白等 6 項）
+> 最後更新：2026-08-12 21:06 +08:00（三方獨立 code review 後修正：圖表謊報的第二條路徑、前端錯誤狀態、CI 健康檢查等）
+
+> ⚠️ **授權聲明待統一**：本 README 寫 MIT，但網頁頁尾宣告 CC BY-NC-SA 4.0。兩者實質不同，尚未決定以何者為準。
 
 ## 兩種跑法
 

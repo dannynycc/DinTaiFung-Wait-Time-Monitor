@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS wait_log (
 );
 CREATE INDEX IF NOT EXISTS idx_timestamp ON wait_log(timestamp);
 CREATE INDEX IF NOT EXISTS idx_store_ts  ON wait_log(store_id, timestamp);
+-- 防止 cron 重疊產生重複列（搭配 INSERT OR IGNORE）
+CREATE UNIQUE INDEX IF NOT EXISTS ux_wait_log_ts_store ON wait_log(timestamp, store_id);
 
 CREATE TABLE IF NOT EXISTS wait_changes (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,6 +30,7 @@ CREATE TABLE IF NOT EXISTS wait_changes (
 );
 CREATE INDEX IF NOT EXISTS idx_changes_ts       ON wait_changes(timestamp);
 CREATE INDEX IF NOT EXISTS idx_changes_store_ts ON wait_changes(store_id, timestamp);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_wait_changes_ts_store ON wait_changes(timestamp, store_id);
 
 -- ── 每日 roll-up 產物 ────────────────────────────
 -- raw（wait_log）每天約 9,900 筆、881 KB，是空間主因。但實測顯示各欄位變動頻率差 180 倍：
@@ -51,16 +54,21 @@ CREATE INDEX IF NOT EXISTS idx_stop_store_ts ON stop_changes(store_id, timestamp
 CREATE INDEX IF NOT EXISTS idx_stop_ts       ON stop_changes(timestamp);
 
 -- 每日彙總。num_1~4 與 togo 變動太頻繁不值得留事件流，
--- 但「當日叫到第幾號」「當日叫了幾組」這兩個衍生指標值得永久保存。
+-- 但「當日叫了幾組」這個衍生指標值得永久保存。
+--
+-- 用 MIN/MAX 而非「時序首末」是刻意的：實測 11 間店有 2 間（天母店、A4店）
+-- 的叫號會在當日營業結束後重置回 1000，例如
+--     天母店 MIN=1000 MAX=1378 時序首=1277 時序末=1000
+-- 若照字面取時序首末，「叫號組數」會算成 1000-1277 = 負 277。
 CREATE TABLE IF NOT EXISTS daily_summary (
     date        TEXT    NOT NULL,
     store_id    TEXT    NOT NULL,
     store_name  TEXT    NOT NULL,
-    max_wait    INTEGER,           -- 當日最長候位（分鐘）
-    first_num_1 INTEGER, last_num_1 INTEGER,   -- 差值 = 當日該桌型叫號組數
-    first_num_2 INTEGER, last_num_2 INTEGER,
-    first_num_3 INTEGER, last_num_3 INTEGER,
-    first_num_4 INTEGER, last_num_4 INTEGER,
+    max_wait    INTEGER,           -- 當日最長候位（分鐘）；全日未營業時為 0
+    min_num_1   INTEGER, max_num_1 INTEGER,   -- max-min = 當日該桌型叫號組數
+    min_num_2   INTEGER, max_num_2 INTEGER,
+    min_num_3   INTEGER, max_num_3 INTEGER,
+    min_num_4   INTEGER, max_num_4 INTEGER,
     togo_states INTEGER,           -- 當日外帶叫號的相異狀態數
     first_ts    TEXT,
     last_ts     TEXT,

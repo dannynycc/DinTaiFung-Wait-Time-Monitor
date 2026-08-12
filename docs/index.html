@@ -341,6 +341,8 @@ const ARCHIVE_BASE = 'data';
 // ── 狀態 ─────────────────────────────────────────
 let allRows = [];
 let knownStores = [];
+let allStores = [];             // /api/stores 的權威分店清單（抓取失敗時卡片仍要出現）
+let lastSeenByStore = {};       // 分店 → 最後一次成功抓取的時間戳（圖表延伸上限）
 let selectedStore = '__all__';  // 圖表+表格+卡片 共用篩選
 let archiveDates = new Set();   // 有靜態歷史檔的日期
 
@@ -603,12 +605,32 @@ function stopTimeHeat(unixTs) {
 }
 
 // ── 渲染：卡片（用 /api/latest 給每店「現在」的值）───
+// 以 allStores（來自 /api/stores 的權威清單）為基準逐店渲染，而不是只跑
+// latestList。原因：某店若連續抓取失敗超過查詢視窗，它會從 /api/latest 消失，
+// 卡片就無聲不見了 —— 使用者只會看到 10 張卡片而不會察覺少了一家。
+// 現在改成一律出現，抓不到就明確標示「資料中斷」。
 function renderCards(latestList) {
   const overview = document.getElementById('overview');
   overview.replaceChildren();
 
-  for (const r of latestList) {
-    const name = r.store_name;
+  const byName = new Map(latestList.map(r => [r.store_name, r]));
+  const roster = allStores.length ? allStores : latestList.map(r => r.store_name);
+
+  for (const name of roster) {
+    const r = byName.get(name);
+    if (!r) {
+      const card = document.createElement('div');
+      card.className = 'store-card idle';
+      card.dataset.store = name;
+      card.addEventListener('click', () => setFilter(selectedStore === name ? '__all__' : name));
+      card.appendChild(createEl('div', name, 'name'));
+      const wrap = createEl('div', null, 'closed');
+      wrap.appendChild(createEl('span', '資料中斷', 'wait'));
+      card.appendChild(wrap);
+      card.appendChild(createEl('div', '近期無成功抓取', 'stop-time unset'));
+      overview.appendChild(card);
+      continue;
+    }
     const wt = r.wait_time;
     const wn = waitNumber(wt);
     const isClosed = wn === null;   // '-1' 與「已停止內用取號」都算
@@ -695,11 +717,28 @@ function buildChartDatasets(changes, dateStr) {
   const datasets = [];
   for (const name of showStores) {
     const pts = byStore[name].slice();
-    // 補延伸點。已停止取號的店只延到「停止的那一刻」，不延到現在 ——
-    // 否則圖表會宣稱一個早就停止取號的店還維持著最後那個候位時間。
+    // 補延伸點。兩個上限，缺一不可：
+    //   (a) 已停止取號 → 只延到停止的那一刻
+    //   (b) 抓取失敗   → 只延到最後一次真的抓到這家店的時刻
+    // 兩者是同一類錯誤的不同觸發路徑：延伸邏輯把「沒有新的變化事件」
+    // 當成「值沒變」，但它也可能是「我們根本沒抓到資料」。少了 (b)，
+    // 一家連續抓不到的店會被畫成一條自信的水平線 —— 那是謊報。
+    // 決定線條要畫到哪裡。三種情況要分清楚，混在一起就會失真：
+    //   1. 觀測到停止取號 → 延到那一刻（這是我們「真的看到」的事實，要保留）
+    //   2. 歷史日         → 延到當日終點
+    //   3. 今日仍在營業   → 延到「最後一次真的抓到這家店」與「現在」的較早者；
+    //                       若完全沒有近期觀測（連續抓取失敗），就不延伸
     if (pts.length > 0) {
-      const end = stoppedAt[name] || tailStr;
-      pts.push({ x: end, y: pts[pts.length - 1].y });
+      let end;
+      if (stoppedAt[name]) {
+        end = stoppedAt[name];
+      } else if (!isToday) {
+        end = tailStr;
+      } else {
+        const seen = lastSeenByStore[name];
+        end = seen ? (seen < tailStr ? seen : tailStr) : null;
+      }
+      if (end) pts.push({ x: end, y: pts[pts.length - 1].y });
     }
     const color = storeColor(name);
     datasets.push({
@@ -781,6 +820,10 @@ function renderTable() {
 // 「上次更新」要顯示**資料的**時間，不是瀏覽器的時鐘。
 // 抓取只跑台北 09:00-23:59，深夜看板顯示的是昨晚最後一筆；
 // 若寫成當下時間，等於宣稱資料是剛抓的 —— 那是謊報。
+// 抓取視窗（台北時間）。與 Worker 的 cron `* 1-15 * * *`（UTC）一致。
+const FETCH_WINDOW_START_HOUR = 9;
+const FETCH_WINDOW_END_HOUR = 24;
+
 function renderFreshness(latestList) {
   const el = document.getElementById('lastUpdate');
   if (!latestList.length) { el.textContent = '無資料'; return; }
@@ -788,10 +831,17 @@ function renderFreshness(latestList) {
   const ageMin = Math.floor(
     (taipeiNow().getTime() - Date.parse(ts.replace(' ', 'T') + 'Z')) / 60000
   );
+
+  // 「非抓取時段」必須依**當下是否真的在視窗外**判斷，不能用「超過 1 小時」推測。
+  // 舊寫法會把下午的斷線標成「非抓取時段」，等於安慰使用者說這是正常排程休息 ——
+  // 那是在製造假的安心感，比不顯示還糟。
+  const hour = taipeiNow().getUTCHours();
+  const outsideWindow = hour < FETCH_WINDOW_START_HOUR || hour >= FETCH_WINDOW_END_HOUR;
+
   let suffix = '';
-  if (ageMin >= 60) {
-    const h = Math.floor(ageMin / 60);
-    suffix = `（${h} 小時前，非抓取時段）`;
+  if (ageMin >= 5) {
+    const age = ageMin >= 60 ? `${Math.floor(ageMin / 60)} 小時前` : `${ageMin} 分鐘前`;
+    suffix = outsideWindow ? `（${age}，非抓取時段）` : `（${age}，資料可能中斷）`;
   } else if (ageMin >= 3) {
     suffix = `（${ageMin} 分鐘前）`;
   }
@@ -801,16 +851,32 @@ function renderFreshness(latestList) {
 // ── 主渲染 ──────────────────────────────────────
 function render(changesRows, latestList) {
   allRows = changesRows;
-  // 下拉店家清單從 latestList 抽（因為 latest 一定有所有「目前活躍」的店）
-  const newStores = latestList.map(r => r.store_name);
+  // 下拉用 /api/stores 的權威清單；抓不到的店也要留在選單裡，否則使用者
+  // 會以為那家店不存在，而不是「那家店現在抓不到」。
+  const newStores = allStores.length ? allStores : latestList.map(r => r.store_name);
   if (newStores.join() !== knownStores.join()) {
     knownStores = newStores;
     populateDropdowns(knownStores);
   }
+  // 記錄每店最後一次成功抓取的時間，給圖表當延伸上限
+  lastSeenByStore = Object.fromEntries(latestList.map(r => [r.store_name, r.timestamp]));
+
   renderCards(latestList);
   renderChart();
   renderTable();
   renderFreshness(latestList);
+}
+
+// 明確的錯誤狀態。沒有這個的話，端點掛掉時畫面是「空的但看起來正常」——
+// 使用者會以為今天沒人排隊，而不是知道這裡出錯了。
+function renderError(msg) {
+  const overview = document.getElementById('overview');
+  const box = createEl('div', null, 'store-card idle');
+  box.style.gridColumn = '1 / -1';
+  box.appendChild(createEl('div', '無法取得資料', 'name'));
+  box.appendChild(createEl('div', msg, 'stop-time unset'));
+  overview.replaceChildren(box);
+  document.getElementById('lastUpdate').textContent = '連線失敗';
 }
 
 // ── 定時拉資料 ──────────────────────────────────
@@ -852,11 +918,30 @@ async function refresh(options = {}) {
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    const [changes, latest] = await Promise.all([
+    // 用 allSettled 而非 all：Promise.all 任一個 reject 就整包放棄，
+    // 成功的那半也被丟掉 —— 一個端點掛掉會讓整頁空白。
+    // 現在改成能畫多少畫多少，兩個都失敗才顯示錯誤狀態。
+    const [chRes, ltRes] = await Promise.allSettled([
       fetchChanges(requestDate, controller.signal),
       fetchJson(`${API_BASE}/api/latest`, controller.signal),
     ]);
-    if (selectedDate === requestDate) render(changes, latest);
+    if (chRes.status === 'rejected' && chRes.reason?.name === 'AbortError') return;
+    if (ltRes.status === 'rejected' && ltRes.reason?.name === 'AbortError') return;
+
+    if (chRes.status === 'rejected' && ltRes.status === 'rejected') {
+      console.error('fetch error:', chRes.reason, ltRes.reason);
+      renderError(`${chRes.reason?.message ?? chRes.reason}`);
+      return;
+    }
+    if (chRes.status === 'rejected') console.error('changes fetch failed:', chRes.reason);
+    if (ltRes.status === 'rejected') console.error('latest fetch failed:', ltRes.reason);
+
+    if (selectedDate === requestDate) {
+      render(
+        chRes.status === 'fulfilled' ? chRes.value : allRows,
+        ltRes.status === 'fulfilled' ? ltRes.value : [],
+      );
+    }
   } catch (e) {
     if (e.name !== 'AbortError') console.error('fetch error:', e);
   } finally {
@@ -883,9 +968,13 @@ function setupAutoRefresh() {
 async function populateDateDropdown() {
   try {
     // 兩個來源合併：repo 靜態歷史檔 + Worker（今日與尚未匯出的日子）
+    // 失敗要留下痕跡：原本靜默 `.catch(() => [])`，`/api/dates` 掛掉時
+    // 歷史日期會整批消失，畫面看起來像「這站只有今天的資料」。
     const [archive, live] = await Promise.all([
-      fetchJson(`${ARCHIVE_BASE}/index.json`).catch(() => []),
-      fetchJson(`${API_BASE}/api/dates`).catch(() => []),
+      fetchJson(`${ARCHIVE_BASE}/index.json`)
+        .catch(e => { console.warn('archive index 讀取失敗，歷史日期可能不完整:', e.message); return []; }),
+      fetchJson(`${API_BASE}/api/dates`)
+        .catch(e => { console.warn('/api/dates 讀取失敗，歷史日期可能不完整:', e.message); return []; }),
     ]);
     archiveDates = new Set(archive);
     const t = todayStr();
@@ -910,6 +999,13 @@ document.getElementById('dateFilter').addEventListener('change', function() {
 });
 
 (async () => {
+  // 先取得權威分店清單。有了它，即使某店抓取失敗、從 /api/latest 消失，
+  // 卡片與下拉選單仍會出現並標示「資料中斷」，而不是無聲少一家。
+  try {
+    allStores = (await fetchJson(`${API_BASE}/api/stores`)).map(s => s.store_name);
+  } catch (e) {
+    console.warn('/api/stores 讀取失敗，改用 latest 的店家清單:', e.message);
+  }
   await populateDateDropdown();
   refresh();
   setupAutoRefresh();

@@ -51,7 +51,16 @@ jobs:
           mkdir -p docs/data
           curl -sS --fail --max-time 60 \
             "$API_BASE/api/changes?date=$d" -o /tmp/day.json
-          n=$(python3 -c "import json;print(len(json.load(open('/tmp/day.json'))))")
+          # 一定要驗型別：若端點回的是 {"error": ...} 這種物件，len() 會是 1
+          # 而不是 0，空檔保護就失效，錯誤物件會被當成一天的資料寫進 repo。
+          n=$(python3 -c "
+          import json, sys
+          d = json.load(open('/tmp/day.json'))
+          if not isinstance(d, list):
+              print(f'::error::/api/changes 回傳的不是陣列：{str(d)[:200]}', file=sys.stderr)
+              sys.exit(1)
+          print(len(d))
+          ")
           echo "count=$n" >> "$GITHUB_OUTPUT"
           echo "取得 $n 筆變化事件"
 
@@ -59,8 +68,7 @@ jobs:
         if: steps.fetch.outputs.count == '0'
         run: |
           echo "::warning::${{ steps.pick.outputs.date }} 沒有任何變化事件，跳過寫入。"
-          echo "可能原因：Worker cron 當天沒跑、或該日確實無資料。請查 /api/health。"
-          exit 0
+          echo "後續的健康度檢查會判斷這是 cron 中斷還是該日確實無資料。"
 
       - name: 寫入 docs/data 並重建索引
         if: steps.fetch.outputs.count != '0'
@@ -82,21 +90,51 @@ jobs:
           print(f'寫入 {date}.json（{len(rows)} 筆），索引共 {len(dates)} 天')
           PY
 
+      # 刻意「不」加 if 條件：這個診斷步驟最有價值的時刻，正是前一步取得
+      # 0 筆資料的時候（代表 Worker cron 可能整天沒跑）。原本它被
+      # `if: count != '0'` 擋住，等於在唯一需要它的情況下不執行。
+      # 也不加 continue-on-error：真的斷線就該讓這個 job 紅燈，
+      # 綠燈加一行沒人看的 warning 等於沒有告警。
       - name: 抓取健康度檢查（cron 是否有漏跑）
-        if: steps.fetch.outputs.count != '0'
-        continue-on-error: true
+        if: always() && steps.pick.outcome == 'success'
         run: |
-          curl -sS --max-time 30 "$API_BASE/api/health" -o /tmp/health.json || exit 0
-          python3 - <<'PY'
-          import json
+          if ! curl -sS --fail --max-time 30 "$API_BASE/api/health" -o /tmp/health.json; then
+            echo "::error::無法取得 /api/health —— Worker 可能整個掛了"
+            exit 1
+          fi
+          COUNT="${{ steps.fetch.outputs.count }}" python3 - <<'PY'
+          import json, os, sys, datetime
           h = json.load(open('/tmp/health.json'))
-          bad = [r for r in h if r['fail_count'] or r['note']]
-          if bad:
-              print('::warning::近期抓取有異常：')
-              for r in bad[:5]:
-                  print(f"  {r['timestamp']} ok={r['ok_count']} fail={r['fail_count']} {r['note']}")
-          else:
-              print(f'近 {len(h)} 次抓取全部正常')
+          if not h:
+              print('::error::fetch_health 完全沒有紀錄 —— cron 從未成功執行')
+              sys.exit(1)
+
+          # RETRY_OK 是「失敗後自我修復成功」的訊號，不是告警來源。
+          # 原本的條件是 `if r['fail_count'] or r['note']`，會把每個重試成功的
+          # 週期都誤報成異常 —— 我自己加的 RETRY_OK 觸發了我自己寫的告警。
+          def is_bad(r):
+              note = r.get('note') or ''
+              real = [p for p in note.split(' | ')
+                      if p and not p.startswith('RETRY_OK') and not p.startswith('ROLLUP_NOOP')]
+              return bool(real)
+
+          bad = [r for r in h if is_bad(r)]
+          latest = max(r['timestamp'] for r in h)
+          age_min = (datetime.datetime.now() - datetime.datetime.strptime(latest, '%Y-%m-%d %H:%M:%S')).total_seconds() / 60
+
+          print(f'最近一次抓取：{latest}（{age_min:.0f} 分鐘前）')
+          print(f'近 {len(h)} 次紀錄中，有實質問題的 {len(bad)} 次')
+          for r in bad[:5]:
+              print(f"  {r['timestamp']} ok={r['ok_count']} fail={r['fail_count']} {r['note']}")
+
+          # 台北 03:00 執行時，最近一次抓取應是昨晚 23:59 前後（約 3 小時前）。
+          # 超過 5 小時代表昨天提早斷線了。
+          if age_min > 300:
+              print(f'::error::最近一次抓取在 {age_min:.0f} 分鐘前，遠超預期 —— cron 可能已中斷')
+              sys.exit(1)
+          if os.environ.get('COUNT') == '0':
+              print('::error::前一日沒有任何變化事件，但 cron 有在跑 —— 請人工確認')
+              sys.exit(1)
           PY
 
       - name: commit

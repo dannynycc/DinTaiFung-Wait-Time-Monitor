@@ -33,11 +33,18 @@ const STORES = [
 
 const FETCH_TIMEOUT_MS = 15000;
 
-// raw 保留天數。1 = 只留今天（一天結束就 roll-up）。
-// 用 2 是刻意留一天安全邊際：roll-up 是不可逆的，多留一天讓錯誤有機會被發現。
+// raw 保留天數。cutoff = (今天 - N 天) 的 00:00，所以實際保留 N+1 個日曆日：
+//   N=1 → 昨天+今天（2 天）    N=2 → 前天+昨天+今天（3 天）
+// 用 2 是刻意留安全邊際：roll-up 不可逆，多留一天讓錯誤有機會被發現。
 const RAW_RETENTION_DAYS = 2;
 const HEALTH_RETENTION_DAYS = 14; // fetch_health 每天 900 筆，不修剪一年就 32 萬筆
-const ROLLUP_AT = '09:02';        // 台北時間；cron 視窗 09:00-23:59，這是每天最早能跑的時機
+
+// roll-up 觸發窗（台北時間）。cron 視窗是 09:00-23:59，這是每天最早的時機。
+// 用「一段窗」而非單一分鐘：Cloudflare cron 是 best-effort，單一分鐘被延遲或
+// 丟棄就整天不跑；而該分鐘的 cycle 若全店抓取失敗或寫入失敗也會提前 return/throw。
+// roll-up 本身是冪等的（第一次跑完就沒有 < cutoff 的列了，後續都是 no-op），
+// 所以多試幾分鐘的成本近乎零。
+const ROLLUP_WINDOW = ['09:02', '09:03', '09:04', '09:05', '09:06'];
 
 // ── 時間 ──────────────────────────────────────────
 // Worker 一律跑 UTC。資料庫裡的時間戳全部是台北時間，格式 'YYYY-MM-DD HH:MM:SS'，
@@ -137,6 +144,9 @@ const D1_MAX_BOUND_PARAMS = 100;
  * 產生 multi-row INSERT，必要時切成多個 statement。
  * 只有佔位符數量是動態的，值一律綁定參數，不做字串拼接。
  */
+// 用 INSERT OR IGNORE 搭配 (timestamp, store_id) 唯一索引：
+// 若兩個 cron invocation 在同一分鐘重疊，第二次的重複列被安靜忽略，
+// 而不是讓整個 batch 因唯一鍵衝突而 rollback（那會連當次資料都寫不進去）。
 function buildInserts(table, columns, rows) {
   const perRow = columns.length;
   const rowsPerStatement = Math.max(1, Math.floor(D1_MAX_BOUND_PARAMS / perRow));
@@ -145,7 +155,7 @@ function buildInserts(table, columns, rows) {
   for (let i = 0; i < rows.length; i += rowsPerStatement) {
     const chunk = rows.slice(i, i + rowsPerStatement);
     out.push({
-      sql: `INSERT INTO ${table} (${columns.join(',')}) VALUES ${chunk.map(() => tuple).join(',')}`,
+      sql: `INSERT OR IGNORE INTO ${table} (${columns.join(',')}) VALUES ${chunk.map(() => tuple).join(',')}`,
       binds: chunk.flatMap((r) => columns.map((c) => r[c])),
     });
   }
@@ -158,10 +168,12 @@ async function runCycle(env) {
   const { results, failures, retried } = await fetchAllStores(env);
 
   if (results.length === 0) {
-    await env.DB.prepare(
-      'INSERT INTO fetch_health (timestamp, ok_count, fail_count, elapsed_ms, note) VALUES (?,?,?,?,?)'
-    ).bind(ts, 0, failures.length, Date.now() - started, failures.join('; ').slice(0, 500)).run();
-    return { ts, ok: 0, fail: failures.length, changes: 0 };
+    await writeHealth(env, ts, 0, failures.length, Date.now() - started,
+      `ALL_FAIL: ${failures.join('; ')}`.slice(0, 500));
+    // 全店失敗要 throw。原本只寫 health 就 return，等於一次完整斷線在
+    // wrangler tail / Observability 裡完全看不到 —— 與本檔「用 await 讓失敗浮上來」
+    // 的設計原則矛盾。health 已先寫入，throw 不會讓這筆紀錄消失。
+    throw new Error(`all ${failures.length} stores failed`);
   }
 
   const statements = [];
@@ -215,27 +227,49 @@ async function runCycle(env) {
     writeError = e?.message ?? String(e);
   }
 
-  // retried 也記進 note：這樣才量得出「重試到底有沒有用」，
-  // 而不是只看到 fail_count 變 0 就以為問題消失了。
+  if (writeError) {
+    await writeHealth(env, ts, 0, failures.length, Date.now() - started,
+      `WRITE_FAIL: ${writeError}`);
+    throw new Error(`D1 write failed: ${writeError}`);
+  }
+
+  // 4) roll-up。放在每分鐘的路徑上會白白吃掉 CPU 額度（cron 的 CPU 實測 7-8ms、
+  //    Free 上限 10ms），所以只在觸發窗內跑。時刻可用 env 覆寫，讓本機測試能走
+  //    同一條 production 程式碼路徑，不必改常數再改回來（改回來忘了就是事故）。
+  //    刻意放在 health 寫入「之前」：否則 roll-up 的結果無處可記，
+  //    只會留在 wrangler tail 這種即逝的地方。
+  const window = env.ROLLUP_AT ? [env.ROLLUP_AT] : ROLLUP_WINDOW;
+  let rollupNote = null;
+  if (window.includes(ts.slice(11, 16))) {
+    try {
+      const n = await rollupRawLog(env);
+      rollupNote = n ? `ROLLUP_OK: ${n} raw rows` : 'ROLLUP_NOOP';
+    } catch (e) {
+      rollupNote = `ROLLUP_FAIL: ${e?.message ?? e}`;
+    }
+  }
+
+  // 分類寫進 note，讓 CI 的健康檢查能分辨「已自我修復」與「真的有問題」。
+  // RETRY_OK 是成功自我修復的訊號，不該被當成告警來源。
   const note = [
-    writeError ? `WRITE_FAIL: ${writeError}` : null,
     failures.length ? `FETCH_FAIL: ${failures.join('; ')}` : null,
     retried ? `RETRY_OK: ${retried}` : null,
+    rollupNote,
   ].filter(Boolean).join(' | ').slice(0, 500) || null;
 
-  await env.DB.prepare(
+  await writeHealth(env, ts, results.length, failures.length, Date.now() - started, note);
+
+  if (rollupNote && rollupNote.startsWith('ROLLUP_FAIL')) {
+    throw new Error(rollupNote);   // health 已寫入，throw 讓 Observability 也看得到
+  }
+
+  return { ts, ok: results.length, fail: failures.length, changes: changes.length, rollupNote };
+}
+
+function writeHealth(env, ts, ok, fail, elapsed, note) {
+  return env.DB.prepare(
     'INSERT INTO fetch_health (timestamp, ok_count, fail_count, elapsed_ms, note) VALUES (?,?,?,?,?)'
-  ).bind(ts, writeError ? 0 : results.length, failures.length, Date.now() - started, note).run();
-
-  if (writeError) throw new Error(`D1 write failed: ${writeError}`);
-
-  // 4) 每天只在固定時刻 roll-up 一次。放在每分鐘的路徑上會白白吃掉 CPU 額度
-  //    （cron 的 CPU 實測 7-8ms，Free 上限 10ms，餘裕本來就不多）。
-  //    時刻可用 env 覆寫，這樣本機測試能觸發同一條 production 程式碼路徑，
-  //    不必為了測試去改常數再改回來（改回來忘了就是事故）。
-  if (ts.slice(11, 16) === (env.ROLLUP_AT || ROLLUP_AT)) await rollupRawLog(env);
-
-  return { ts, ok: results.length, fail: failures.length, changes: changes.length };
+  ).bind(ts, ok, fail, elapsed, note).run();
 }
 
 /**
@@ -275,12 +309,16 @@ async function rollupRawLog(env) {
     WHERE pv IS NULL OR last_time IS NOT pv
     ORDER BY timestamp, store_id`;
 
-  // 2) 每日彙總。first/last 的差值就是當日該桌型叫了幾組。
+  // 2) 每日彙總。max-min 的差值就是當日該桌型叫了幾組。
+  //    用 MIN/MAX 而非時序首末是刻意的：實測 11 間店有 2 間（天母店、A4店）
+  //    的叫號會在當日營業結束後重置回 1000，例如天母店
+  //      MIN=1000 MAX=1378 時序首=1277 時序末=1000
+  //    照字面取時序首末，「叫號組數」會算成 1000-1277 = 負 277。
   const summarySql = `
     INSERT OR REPLACE INTO daily_summary
       (date, store_id, store_name, max_wait,
-       first_num_1, last_num_1, first_num_2, last_num_2,
-       first_num_3, last_num_3, first_num_4, last_num_4,
+       min_num_1, max_num_1, min_num_2, max_num_2,
+       min_num_3, max_num_3, min_num_4, max_num_4,
        togo_states, first_ts, last_ts, raw_rows)
     SELECT substr(timestamp,1,10), store_id, store_name,
            MAX(CAST(wait_time AS INTEGER)),
@@ -297,6 +335,14 @@ async function rollupRawLog(env) {
   // 保留 14 天：足以回溯查「上週某天為什麼有空洞」，又不會累積。
   const healthCutoff = daysAgoTaipei(HEALTH_RETENTION_DAYS);
 
+  // 先數有多少列要處理，回傳給呼叫端寫進 fetch_health。
+  // 沒有這個數字就無法事後回答「那天 roll-up 到底跑了沒、處理了什麼」——
+  // console.log 只存在於 wrangler tail，關掉就沒了。
+  const pending = await env.DB.prepare(
+    'SELECT COUNT(*) AS n FROM wait_log WHERE timestamp < ?'
+  ).bind(cutoff).first();
+  const n = pending?.n ?? 0;
+
   await env.DB.batch([
     env.DB.prepare(stopSql).bind(cutoff),
     env.DB.prepare(summarySql).bind(cutoff),
@@ -304,7 +350,8 @@ async function rollupRawLog(env) {
     env.DB.prepare('DELETE FROM fetch_health WHERE timestamp < ?').bind(healthCutoff),
   ]);
 
-  console.log(`rollup done, cutoff=${cutoff}`);
+  console.log(`rollup done, cutoff=${cutoff}, raw rows processed=${n}`);
+  return n;
 }
 
 // ── 唯讀 API ──────────────────────────────────────
