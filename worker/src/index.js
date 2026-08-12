@@ -57,12 +57,12 @@ function daysAgoTaipei(days) {
 
 // ── 抓取 ──────────────────────────────────────────
 
-async function fetchStore(store) {
+async function fetchStore(store, timeoutMs = FETCH_TIMEOUT_MS) {
   const res = await fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: `storeid=${encodeURIComponent(store.id)}`,
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
@@ -81,16 +81,48 @@ async function fetchStore(store) {
   };
 }
 
-/** 併發抓全部分店。單店失敗不影響其他店（沿用 app.py 逐店 try/except 的行為）。 */
-async function fetchAllStores() {
-  const settled = await Promise.allSettled(STORES.map(fetchStore));
-  const results = [];
-  const failures = [];
+/**
+ * 併發抓全部分店。單店失敗不影響其他店（沿用 app.py 逐店 try/except 的行為）。
+ *
+ * 失敗的店重試一次：正式站實測 20 個 cycle 有 2 次單店逾時（約 10%），
+ * 整天約 9,900 個資料點會漏掉 90 個。重試是 I/O 等待不是運算，
+ * 不會侵蝕本來就吃緊的 CPU 額度（實測 7-8ms / 上限 10ms）。
+ */
+async function fetchRound(stores, timeoutMs) {
+  const settled = await Promise.allSettled(stores.map((s) => fetchStore(s, timeoutMs)));
+  const ok = [];
+  const failed = [];
   settled.forEach((s, i) => {
-    if (s.status === 'fulfilled') results.push(s.value);
-    else failures.push(`${STORES[i].id}:${s.reason?.message ?? s.reason}`);
+    if (s.status === 'fulfilled') ok.push(s.value);
+    else failed.push({ store: stores[i], reason: s.reason?.message ?? String(s.reason) });
   });
-  return { results, failures };
+  return { ok, failed };
+}
+
+async function fetchAllStores(env = {}) {
+  // 逾時可用 env 覆寫，讓本機能故意調到 1ms 逼出失敗、實際走一次重試路徑。
+  // 沒有這個開關就只能「等它自己壞」，等於重試邏輯永遠沒被驗證過。
+  const timeoutMs = Number(env.FETCH_TIMEOUT_MS) || FETCH_TIMEOUT_MS;
+
+  const first = await fetchRound(STORES, timeoutMs);
+  const results = first.ok;
+  let failures = first.failed;
+  let retried = 0;
+
+  if (failures.length) {
+    console.log(`retry round: ${failures.map((f) => f.store.id).join(',')}`);
+    const second = await fetchRound(failures.map((f) => f.store), timeoutMs);
+    results.push(...second.ok);
+    retried = second.ok.length;
+    failures = second.failed;
+    console.log(`retry result: ${retried} recovered, ${failures.length} still failing`);
+  }
+
+  return {
+    results: results.sort((a, b) => a.store_id.localeCompare(b.store_id)),
+    failures: failures.map((f) => `${f.store.id}:${f.reason}`),
+    retried,
+  };
 }
 
 // ── 寫入 ──────────────────────────────────────────
@@ -122,7 +154,7 @@ function buildInserts(table, columns, rows) {
 async function runCycle(env) {
   const started = Date.now();
   const ts = taipeiTimestamp();
-  const { results, failures } = await fetchAllStores();
+  const { results, failures, retried } = await fetchAllStores(env);
 
   if (results.length === 0) {
     await env.DB.prepare(
@@ -182,9 +214,12 @@ async function runCycle(env) {
     writeError = e?.message ?? String(e);
   }
 
+  // retried 也記進 note：這樣才量得出「重試到底有沒有用」，
+  // 而不是只看到 fail_count 變 0 就以為問題消失了。
   const note = [
     writeError ? `WRITE_FAIL: ${writeError}` : null,
     failures.length ? `FETCH_FAIL: ${failures.join('; ')}` : null,
+    retried ? `RETRY_OK: ${retried}` : null,
   ].filter(Boolean).join(' | ').slice(0, 500) || null;
 
   await env.DB.prepare(
