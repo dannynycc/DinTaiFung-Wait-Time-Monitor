@@ -139,6 +139,11 @@
   .td-wait { font-weight: 700; color: #8b4513; }
   .td-closed { color: #bbb; font-style: italic; }
 
+  /* 疑似上游瞬間毛刺：照常列出（表格是稽核紀錄），只是淡化並加註記 */
+  tbody tr.glitch-row { opacity: .55; }
+  tbody tr.glitch-row td { text-decoration: line-through; text-decoration-color: #c9b8a0; }
+  .glitch-mark { font-weight: 400; color: #b08860; text-decoration: none; cursor: help; }
+
   .refresh-info {
     text-align: center; font-size: 11px; color: #bbb; margin-top: 14px;
   }
@@ -692,6 +697,54 @@ function renderCards(latestList) {
 // 邏輯：每個 change event 是一個 (timestamp, wait_time)。
 // Chart.js 用 stepped:'before' → 線條會在 timestamp 時刻「跳」到新值。
 // 為了讓最後一段值有畫到「現在」，幫每店多補一個延伸點到當日最末。
+// ── 上游 API 的瞬間毛刺 ──────────────────────────
+// 官方端點偶爾在單一取樣回報異常低值，下一分鐘又跳回原值。實測 8 天 5,356 個
+// 變化事件中有 30 筆（0.56%），例如：
+//   高雄店 20:58  已停止內用取號 → 0 → 已停止內用取號（只持續 1 分鐘）
+//   新竹店 12:34  120 → 0 → 120
+//   南西店 16:11  110 → 10 → 120
+// 一家已停止取號的店不可能真的變成「等候 0 分鐘」再變回停止。
+//
+// 判定：值只持續 ≤1 分鐘，且 (a) 前後皆為數值、掉到較小者一半以下且絕對落差 ≥30 分鐘，
+// 或 (b) 前後是相同的非數值狀態而此值為 0。
+// 絕對門檻是必要的：只用相對比例會在低數值區大量誤殺（5 → 0 → 5 是短隊真的排空，
+// 每天都在發生）。官方以 5 分鐘為級距更新，一分鐘掉 30 分鐘等於連跌 6 級再連漲 6 級。
+//
+// 只影響圖表繪製，原始資料完全不動，表格照常列出並標示。
+const GLITCH_MAX_MIN = 1;
+const GLITCH_DROP_RATIO = 0.5;
+const GLITCH_MIN_DROP = 30;
+let glitchSet = new Set();
+
+function findGlitches(rows) {
+  const byStore = {};
+  for (const r of rows) {
+    if (!byStore[r.store_id]) byStore[r.store_id] = [];
+    byStore[r.store_id].push(r);
+  }
+  const found = new Set();
+  for (const evs of Object.values(byStore)) {
+    for (let i = 0; i < evs.length; i++) {
+      const e = evs[i];
+      const nxt = evs[i + 1];
+      if (!nxt) continue;
+      const held = nxt.duration_min;
+      if (held === null || held === undefined || held > GLITCH_MAX_MIN) continue;
+      const cur = waitNumber(e.wait_time);
+      if (cur === null) continue;
+      const prev = waitNumber(e.prev_value);
+      const next = waitNumber(nxt.wait_time);
+      if (prev !== null && next !== null) {
+        const floor = Math.min(prev, next);
+        if (cur <= floor * GLITCH_DROP_RATIO && floor - cur >= GLITCH_MIN_DROP) found.add(e);
+      } else if (e.prev_value !== null && e.prev_value === nxt.wait_time && cur === 0) {
+        found.add(e);
+      }
+    }
+  }
+  return found;
+}
+
 // 非數值事件（'-1'、「已停止內用取號」）不畫成點，但要記下「線在此刻終止」。
 // 舊版直接 continue 掉，導致延伸邏輯拿最後一個數值一路畫到現在 ——
 // 店家早就停止取號，圖表卻宣稱候位時間仍維持在那個值。
@@ -699,6 +752,7 @@ function buildChartDatasets(changes, dateStr) {
   const byStore = {};
   const stoppedAt = {};   // store_name → 停止取號的時間戳
   for (const r of changes) {
+    if (glitchSet.has(r)) continue;   // 上游瞬間毛刺，不畫（資料仍保留）
     const n = waitNumber(r.wait_time);
     if (n === null) {
       if (byStore[r.store_name]) stoppedAt[r.store_name] = r.timestamp;
@@ -816,7 +870,14 @@ function renderTable() {
     // 變化欄：轉入非數值狀態（未營業／已停止取號）用淡色標示
     const isClosing = waitNumber(r.wait_time) === null;
     const cls = isClosing ? 'td-closed' : 'td-wait';
-    tr.appendChild(createEl('td', fmtChange(r.prev_value, r.wait_time), cls));
+    const td = createEl('td', fmtChange(r.prev_value, r.wait_time), cls);
+    // 毛刺照常列出，只加標記 —— 表格是稽核紀錄，隱藏它跟畫出不存在的線一樣不可接受
+    if (glitchSet.has(r)) {
+      tr.classList.add('glitch-row');
+      td.title = '疑似上游 API 瞬間錯誤回報：此值只持續 1 分鐘且掉超過一半後即彈回。圖表不繪製此點，資料仍完整保留。';
+      td.appendChild(createEl('span', ' ※', 'glitch-mark'));
+    }
+    tr.appendChild(td);
 
     tr.appendChild(createEl('td', fmtDuration(r.duration_min)));
     frag.appendChild(tr);
@@ -835,6 +896,7 @@ function renderTable() {
 // ── 主渲染 ──────────────────────────────────────
 function render(changesRows, latestList) {
   allRows = changesRows;
+  glitchSet = findGlitches(allRows);
   // 下拉店家清單從 latestList 抽（因為 latest 一定有所有「目前活躍」的店）
   const newStores = latestList.map(r => r.store_name);
   if (newStores.join() !== knownStores.join()) {

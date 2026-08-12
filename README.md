@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v3.8-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v3.9-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-08-12 23:04 +08:00（多分店檢視移除資料點，整天 626 個圓點蓋掉趨勢）
+> 最後更新：2026-08-12 23:46 +08:00（過濾上游 API 瞬間毛刺：8 天 5,356 事件中 30 筆，只影響繪圖不動資料）
 
 ## 兩種跑法
 
