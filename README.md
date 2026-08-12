@@ -2,9 +2,48 @@
 
 即時監控鼎泰豐台灣全分店的現場候位時間，提供 Web 即時看板 + 變化事件分析。
 
-![version](https://img.shields.io/badge/version-v2.3-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+**線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-> 最後更新：2026-05-08 10:22 +08:00（Codex：常駐穩定性與斷線恢復強化）
+![version](https://img.shields.io/badge/version-v3.0-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+
+> 最後更新：2026-08-12 17:42 +08:00（上雲：Cloudflare Worker + D1 + GitHub Pages）
+
+## 兩種跑法
+
+| | 本機版 | 雲端版 |
+|---|---|---|
+| 抓取 | `app.py`（電腦要開著） | Cloudflare Worker cron |
+| 儲存 | 本機 `wait_log.db` | Cloudflare D1 |
+| 前端 | `index.html`（localhost:5678） | `docs/`（GitHub Pages） |
+| 抓取時段 | 24 小時 | 台北 09:00–23:59 |
+
+兩者互不干擾，可並存。本文件先講雲端版，本機版說明在後半。
+
+## 雲端架構
+
+```
+Cloudflare Worker  (cron 每分鐘，台北 09:00-23:59)
+      │  併發 11 次 POST 鼎泰豐 API
+      ▼
+   Cloudflare D1  (SQLite)
+      │                          ╲  每日台北 03:00
+      │ /api/latest /api/changes  ╲ GitHub Actions 匯出
+      ▼                            ▼
+ GitHub Pages 前端  ◀────  docs/data/YYYY-MM-DD.json
+   即時卡片走 Worker API，歷史圖表走 repo 靜態檔
+```
+
+歷史資料刻意走 repo 靜態檔而非 Worker：不消耗 Worker 額度（該帳號與其他專案共用每日 10 萬次上限），且歷史資料在 GitHub 上直接可下載。
+
+### 雲端版操作
+
+```bash
+cd worker
+npm install
+npx wrangler d1 execute dintaifung --remote --file=schema.sql   # 首次建表
+npx wrangler deploy
+npx wrangler tail                                                # 看即時 log
+```
 
 ## 功能
 
@@ -61,7 +100,9 @@ pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
 - Python 3.8+（只用標準庫，**無需** `pip install`）
 - `curl`（Windows 10+ / macOS / Linux 皆內建）
 
-用 `curl` 而非 `requests` 是因為鼎泰豐伺服器憑證缺少 Subject Key Identifier，Python 的 SSL 驗證會拒絕，curl 預設較寬容。
+本機版用 `curl` 而非 `requests`，原因與憑證鏈有關。
+
+> **2026-08-12 更正**：舊版說明寫「鼎泰豐伺服器憑證缺少 Subject Key Identifier」，暗示是站方憑證有問題 —— 這個描述不正確。實測從 GitHub Actions runner 以 OpenSSL 3.0.13 與 Node undici 連線，兩者都回報 `SSL_VERIFY=0`（驗證通過）。憑證本身沒問題，是 **Python `ssl` 模組在建立憑證鏈時**遇到中繼憑證缺 SKI 就無法完成 path building，較新的 OpenSSL 有替代的鏈結演算法。這也是雲端版能直接用標準 `fetch`、完全不需要 `curl` 的原因。
 
 > Codex 2026-05-07 23:22 +08:00：`app.py` 會先以 bytes 接收 `curl` 的 stdout/stderr，再用 UTF-8 解碼，避免 Windows 預設 cp950 造成背景抓取執行緒拋出 `UnicodeDecodeError`。
 
@@ -71,9 +112,21 @@ pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
 
 ```
 .
-├── app.py                    # 後端 + Web server（主程式）
+├── worker/                   # ── 雲端版 ──
+│   ├── src/index.js          #   Worker：cron 抓取 + 唯讀 API
+│   ├── schema.sql            #   D1 schema（含 fetch_health 健康表）
+│   └── wrangler.toml         #   部署設定（cron 時段、D1 綁定）
+├── docs/                     # GitHub Pages 站台
+│   ├── index.html            #   前端（時區已改為固定台北）
+│   └── data/                 #   每日變化事件靜態檔 + index.json
+├── tools/
+│   └── export_history.py     # 本機 SQLite → docs/data JSON
+├── .github/workflows/
+│   └── daily-export.yml      # 每日台北 03:00 從 D1 匯出進 repo
+│
+├── app.py                    # ── 本機版 ── 後端 + Web server
 ├── watchdog.py               # Supervisor（pythonw 跑，自動重啟 app）
-├── index.html                # 前端頁面（Chart.js + vanilla JS）
+├── index.html                # 本機前端（Chart.js + vanilla JS）
 ├── start.bat                 # 雙擊啟動（背景 hidden）
 ├── stop.bat                  # 雙擊停止整個 process tree
 ├── wait_log.db               # SQLite 資料庫（自動產生）
@@ -97,6 +150,14 @@ pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
 | `GET /api/dates` | DB 中所有有資料的日期（給日期下拉用） |
 | `GET /api/data?date=YYYY-MM-DD` | 指定日期 raw 紀錄（保留供 audit/debug） |
 | `GET /api/stores` | 分店清單 |
+
+雲端版（`https://dintaifung-queue.dannynycc.workers.dev`）提供同名端點，另加一個：
+
+| Endpoint | 說明 |
+|---|---|
+| `GET /api/health` | 最近 20 次 cron 抓取紀錄（成功／失敗店數、耗時、錯誤訊息）。用來判斷「某段時間沒資料」是店家沒開還是排程掛了。 |
+
+雲端版沒有 `/api/data`（raw 逐筆），raw 只留在 D1 供內部使用。
 
 ## 資料 Schema
 

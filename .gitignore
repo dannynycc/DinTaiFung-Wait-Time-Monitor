@@ -25,3 +25,8 @@ watchdog.log
 
 # 注意：wait_log.db 首次 push 當示例資料
 # 之後用 `git update-index --skip-worktree wait_log.db` 避免新資料被追蹤
+
+# Cloudflare Worker
+worker/node_modules/
+worker/.wrangler/
+worker/package-lock.json

@@ -1,5 +1,38 @@
 # Changelog
 
+## v3.0 — 2026-08-12 17:42
+
+上雲。從「電腦要開著才有資料」的本機服務，改成 Cloudflare Worker 全天候抓取 + GitHub Pages 公開看板。本機版（`app.py` / `watchdog.py` / 根目錄 `index.html`）完整保留，兩者可並存。
+
+### 新增
+- `worker/` — Cloudflare Worker，兩個角色：cron 每分鐘抓 11 間分店寫入 D1；提供唯讀 API 給前端。
+  - 正式網址 `https://dintaifung-queue.dannynycc.workers.dev`
+  - 排程 `* 1-15 * * *`（UTC）= 台北 09:00–23:59，每天 900 次。深夜店家已停止取號，抓回來只是凍結值。
+  - 11 店改為併發抓取。序列版實測 12.4 秒，併發約 0.3–0.5 秒。
+  - 新增 `fetch_health` 表，每個 cron 週期記一筆。雲端排程失敗是靜默的，沒有這張表就分不出「某段時間沒資料」是店家沒開還是排程掛了。
+- `docs/` — GitHub Pages 前端，由根目錄 `index.html` 移植。
+- `docs/data/*.json` — 2026-04-21～05-17 共 23 天、14,645 筆變化事件（1.87 MB），從本機 `wait_log.db` 匯出。
+- `tools/export_history.py` — 本機 SQLite 匯出成靜態 JSON 的工具。
+- `.github/workflows/daily-export.yml` — 每日台北 03:00 把前一日事件從 D1 匯出進 repo，一天一個 commit。空資料會中止而不是用空檔覆蓋既有檔案。
+
+### 修正
+- 前端時區。原本用瀏覽器當地時間算「今天」與「止號時間」，本機自用沒問題（人與機器都在台灣），但公開網頁不行 —— 倫敦訪客的「今天」會錯一天。改為一律以台北時間（固定 UTC+8）計算。
+- 前端輪詢由 15 秒改為 60 秒，對齊後端 cron 頻率。原本 3/4 的請求是重複的。
+
+### 查證與更正
+- README 原本記載「鼎泰豐憑證缺 Subject Key Identifier，Python 的 SSL 驗證會拒絕」，暗示站方憑證有問題。實測從 GitHub runner（美國 Azure IP）以 OpenSSL 3.0.13 與 Node undici 連線，兩者皆回報 `SSL_VERIFY=0`（驗證通過）。真正原因是 **Python `ssl` 模組建立憑證鏈的限制**，非站方憑證有問題。離開 Python 後 `curl` 相依即可移除。
+- 同一次探測確認 API 無地區封鎖，美國 IP 可正常存取。
+
+### 已知限制
+- Worker cron 的 CPU 時間實測 7–8 ms，Workers Free 方案上限為 10 ms，餘裕僅 20–30%。若超標該次 cycle 會被中止，症狀是資料出現分鐘級空洞。`fetch_health` 表與每日匯出的健康檢查即為偵測手段。
+- 部署後約 30 秒內出現過兩次 HTTP 500，其後 45 次連續請求（3 端點各 15 次）全數 200，未能重現。**根因未確認**，持續觀察中。
+- D1 免費方案單一資料庫上限 500 MB。`wait_log` 每天約 15,100 筆、約 1.5 MB，目前策略為保留 30 天後硬刪（`worker/src/index.js` 的 `pruneRawLog()`）。降頻取樣與每日彙總兩種替代方案已在該函式註解中列出。
+
+### 測試
+- 本機 `wrangler dev --local`：六角度回歸（重複變化偵測、`duration_min` 計算、D1 參數上限、時區、日期過濾邊界、快取標頭）。
+- 正式站：cron 連續分鐘級寫入確認、45 次 API 請求全數 200、真 Chrome 讀 DOM 驗證 24 個日期選項／11 張卡片／11 條圖表線。
+- 歷史日路徑：切換至 2026-05-17 確認讀取 `docs/data/2026-05-17.json`，且零次 Worker `/api/changes` 呼叫。
+
 ## v2.3 — 2026-05-08 10:22
 
 Codex 針對常駐服務做記憶體與斷線恢復檢查：未發現典型線性 memory leak，並補強 HTTP server、watchdog 與前端輪詢，降低長時間執行時的錯誤 log 膨脹與請求堆積風險。

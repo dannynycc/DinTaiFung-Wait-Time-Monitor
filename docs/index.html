@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>鼎泰豐全分店 — 候位監控</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft JhengHei", "PingFang TC", sans-serif;
+    background: #f5f0eb;
+    color: #3a3a3a;
+    padding: 20px 24px;
+  }
+
+  header { text-align: center; margin-bottom: 24px; }
+  header h1 { font-size: 24px; color: #8b4513; letter-spacing: 2px; }
+  header .sub { font-size: 12px; color: #999; margin-top: 4px; }
+  header .date-picker {
+    display: inline-flex; align-items: center; gap: 8px;
+    margin-top: 10px; font-size: 13px; color: #5a3a1a;
+  }
+  header .date-picker select {
+    font-family: inherit; font-size: 13px;
+    padding: 4px 10px; border: 1px solid #d4c3aa;
+    border-radius: 6px; background: #fff; color: #3a3a3a;
+    cursor: pointer; min-width: 140px;
+  }
+  header .date-picker select:focus { outline: 2px solid #8b4513; }
+
+  /* 即時總覽卡片 */
+  .overview {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .store-card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 14px 10px;
+    text-align: center;
+    box-shadow: 0 2px 6px rgba(0,0,0,.06);
+    transition: transform .15s;
+    cursor: pointer;
+  }
+  .store-card:hover { transform: translateY(-2px); }
+  .store-card .name {
+    font-size: 13px; font-weight: 600;
+    color: #5a3a1a; margin-bottom: 6px;
+  }
+  .store-card .wait { font-size: 28px; font-weight: 700; color: #8b4513; }
+  .store-card .unit { font-size: 11px; color: #b08860; }
+  .store-card .closed .wait { font-size: 14px; color: #bbb; }
+  .store-card .stop-time {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #b08860;
+    line-height: 1.3;
+  }
+  .store-card .stop-time .label { color: #999; }
+  .store-card .stop-time.hot { color: #d32f2f; font-weight: 600; }
+  .store-card .stop-time.warm { color: #f57c00; }
+  .store-card .stop-time.unset { color: #ccc; font-style: italic; }
+  .store-card.hot    { border-left: 4px solid #d32f2f; }
+  .store-card.warm   { border-left: 4px solid #f57c00; }
+  .store-card.cool   { border-left: 4px solid #388e3c; }
+  .store-card.idle   { border-left: 4px solid #bbb; }
+  .store-card.selected { outline: 3px solid #8b4513; outline-offset: -3px; }
+
+  /* 圖表 */
+  .chart-wrap {
+    background: #fff;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.07);
+    margin-bottom: 24px;
+  }
+  .chart-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .chart-header h2 { font-size: 15px; color: #8b4513; }
+  .chart-filter {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .chart-filter label { font-size: 12px; color: #999; }
+  .chart-filter select {
+    font-family: inherit; font-size: 13px;
+    padding: 4px 10px; border: 1px solid #ddd;
+    border-radius: 6px; background: #fff; color: #3a3a3a;
+    cursor: pointer;
+  }
+  .chart-filter select:focus { outline: 2px solid #8b4513; }
+  .chart-container { position: relative; width: 100%; height: 350px; }
+
+  /* 表格 */
+  .table-wrap {
+    background: #fff;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.07);
+  }
+  .table-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .table-header h2 { font-size: 15px; color: #8b4513; }
+  .table-header select {
+    font-family: inherit; font-size: 13px;
+    padding: 4px 10px; border: 1px solid #ddd;
+    border-radius: 6px; background: #fff; color: #3a3a3a;
+    cursor: pointer;
+  }
+  .table-header select:focus { outline: 2px solid #8b4513; }
+  .scroll-box { max-height: 450px; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  thead th {
+    background: #8b4513; color: #fff;
+    padding: 8px 10px; text-align: center;
+    font-weight: 500; position: sticky; top: 0;
+  }
+  tbody tr:nth-child(even) { background: #faf6f1; }
+  tbody tr:hover { background: #f0e6d8; }
+  tbody td {
+    padding: 6px 10px; text-align: center;
+    border-bottom: 1px solid #eee; white-space: nowrap;
+  }
+  .td-wait { font-weight: 700; color: #8b4513; }
+  .td-closed { color: #bbb; font-style: italic; }
+
+  .refresh-info {
+    text-align: center; font-size: 11px; color: #bbb; margin-top: 14px;
+  }
+
+  .site-footer {
+    max-width: 760px;
+    margin: 36px auto 8px;
+    padding: 18px 22px;
+    font-size: 12px;
+    color: #8a7a66;
+    line-height: 1.75;
+    text-align: center;
+    border-top: 1px solid #e4d9c9;
+  }
+  .site-footer a {
+    color: #8b4513;
+    text-decoration: none;
+    border-bottom: 1px dotted #b08860;
+  }
+  .site-footer a:hover { border-bottom-style: solid; }
+  .site-footer .row { margin: 2px 0; }
+  .site-footer .license {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 2px 8px;
+    border: 1px solid #d4c3aa;
+    border-radius: 4px;
+    font-size: 11px;
+  }
+
+  /* ── 平板 (≤ 900px) ─────────────────────────── */
+  @media (max-width: 900px) {
+    body { padding: 14px 14px; }
+    header h1 { font-size: 20px; letter-spacing: 1px; }
+    header .sub { font-size: 11px; }
+
+    .overview {
+      grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+    .store-card { padding: 10px 6px; }
+    .store-card .name { font-size: 12px; margin-bottom: 4px; }
+    .store-card .wait { font-size: 22px; }
+
+    .chart-wrap, .table-wrap { padding: 14px; border-radius: 10px; }
+    .chart-container { height: 280px; }
+    table { font-size: 11.5px; }
+    thead th { padding: 6px 8px; }
+    tbody td { padding: 5px 8px; }
+  }
+
+  /* ── 手機 (≤ 600px) ─────────────────────────── */
+  @media (max-width: 600px) {
+    body { padding: 10px 10px; }
+    header { margin-bottom: 14px; }
+    header h1 { font-size: 17px; letter-spacing: 0.5px; }
+    header .sub { font-size: 10.5px; line-height: 1.5; }
+
+    .overview {
+      grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+    .store-card { padding: 8px 4px; border-radius: 8px; }
+    .store-card .name { font-size: 11px; margin-bottom: 2px; }
+    .store-card .wait { font-size: 20px; }
+    .store-card .unit { font-size: 10px; }
+    .store-card .closed .wait { font-size: 12px; }
+
+    /* 圖表 / 表格容器縮小 padding */
+    .chart-wrap, .table-wrap {
+      padding: 12px 10px;
+      margin-bottom: 14px;
+      border-radius: 8px;
+    }
+    .chart-header, .table-header {
+      gap: 6px; margin-bottom: 8px;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    .chart-header h2, .table-header h2 { font-size: 13px; }
+    .chart-filter { width: 100%; justify-content: space-between; }
+    .chart-filter select, .table-header select {
+      font-size: 12px; padding: 3px 8px; flex: 1;
+    }
+    .chart-container { height: 240px; }
+
+    /* 表格 — 隱藏次要欄位讓主要資訊可讀 */
+    .col-togo { display: none; }
+    table { font-size: 11px; }
+    thead th { padding: 5px 4px; font-size: 10.5px; }
+    tbody td { padding: 4px 4px; }
+    .scroll-box { max-height: 360px; }
+
+    .site-footer {
+      margin-top: 22px;
+      padding: 14px 14px;
+      font-size: 11px;
+      line-height: 1.65;
+    }
+    .site-footer .row { margin: 3px 0; }
+  }
+
+  /* ── 超小螢幕 (≤ 380px，iPhone SE) ──────────── */
+  @media (max-width: 380px) {
+    .overview {
+      grid-template-columns: repeat(3, 1fr);
+    }
+    .store-card .wait { font-size: 18px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>鼎泰豐全分店 — 候位監控</h1>
+  <div class="sub">資料每 60 秒更新（圖表為步階線，只在等候變化時跳）| 點卡片可篩選</div>
+  <div class="date-picker">
+    <label>日期：</label>
+    <select id="dateFilter"></select>
+  </div>
+</header>
+
+<div class="overview" id="overview"></div>
+
+<div class="chart-wrap">
+  <div class="chart-header">
+    <h2>各分店等候時間趨勢</h2>
+    <div class="chart-filter">
+      <label>篩選分店:</label>
+      <select id="chartFilter">
+        <option value="__all__">全部分店</option>
+      </select>
+    </div>
+  </div>
+  <div class="chart-container">
+    <canvas id="chart"></canvas>
+  </div>
+</div>
+
+<div class="table-wrap">
+  <div class="table-header">
+    <h2>歷史紀錄</h2>
+    <select id="tableFilter">
+      <option value="__all__">全部分店</option>
+    </select>
+  </div>
+  <div class="scroll-box">
+    <table>
+      <thead>
+        <tr>
+          <th>時間</th>
+          <th>分店</th>
+          <th>變化</th>
+          <th>前值持續</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="refresh-info">
+  上次更新: <span id="lastUpdate">-</span>
+  &nbsp;|&nbsp; 總筆數: <span id="totalRows">0</span>
+</div>
+
+<footer class="site-footer">
+  <div class="row">
+    資料來源：<a href="https://www.dintaifung.tw/Queue/?type=3" target="_blank" rel="noopener">鼎泰豐官方候位查詢網頁</a>
+  </div>
+  <div class="row">
+    本站為獨立開發專案，與鼎泰豐無任何關係，資料僅供參考。
+  </div>
+  <div class="row">
+    回報問題：<a href="https://github.com/dannynycc/DinTaiFung-Wait-Time-Monitor/issues" target="_blank" rel="noopener">GitHub Issues</a>
+  </div>
+  <div class="row">
+    <a class="license" href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener">CC BY-NC-SA 4.0</a>
+  </div>
+</footer>
+
+<script>
+// ── 顏色配置 ─────────────────────────────────────
+const STORE_COLORS = {
+  '信義店': '#e53935', '復興店': '#8e24aa', '天母店': '#1e88e5',
+  '新竹店': '#43a047', '101店':  '#f4511e', '台中店': '#00897b',
+  '板橋店': '#fdd835', '高雄店': '#6d4c41', '南西店': '#d81b60',
+  'A4店':   '#3949ab', 'A13店':  '#00acc1', '新生店': '#7cb342',
+};
+function storeColor(name) { return STORE_COLORS[name] || '#8b4513'; }
+
+// ── 設定 ─────────────────────────────────────────
+// 即時資料走 Cloudflare Worker，歷史資料走本 repo 的靜態檔（省 Worker 額度，
+// 也讓歷史資料在 GitHub 上直接可下載）。
+const API_BASE = 'https://dintaifung-queue.dannynycc.workers.dev';
+const ARCHIVE_BASE = 'data';
+
+// ── 狀態 ─────────────────────────────────────────
+let allRows = [];
+let knownStores = [];
+let selectedStore = '__all__';  // 圖表+表格+卡片 共用篩選
+let archiveDates = new Set();   // 有靜態歷史檔的日期
+
+// ── 台北時間 ─────────────────────────────────────
+// 本機版可以直接用瀏覽器當地時間，因為看的人就在台灣、機器也在台灣。
+// 上線成公開網頁後不行：資料庫時間戳全是台北時間，若用訪客的當地時間算「今天」，
+// 倫敦的訪客早上會看到還沒開始的日期、東京的訪客半夜會提早跳到明天。
+// 台灣自 1980 年起無日光節約時間，固定 UTC+8。
+function taipeiNow() {
+  return new Date(Date.now() + 8 * 3600 * 1000);
+}
+function todayStr() {
+  return taipeiNow().toISOString().slice(0, 10);
+}
+function taipeiClock(d) {
+  // 傳入已位移過的 Date，取出「台北牆上時鐘」的 HH:MM
+  return String(d.getUTCHours()).padStart(2, '0') + ':' +
+         String(d.getUTCMinutes()).padStart(2, '0');
+}
+
+let selectedDate = todayStr();  // YYYY-MM-DD
+
+function dateLabel(dateStr) {
+  const t = todayStr();
+  if (dateStr === t) return `${dateStr}（今日）`;
+  const d = new Date(dateStr + 'T00:00:00');
+  const now = new Date(t + 'T00:00:00');
+  const diff = Math.round((now - d) / 86400000);
+  if (diff === 1) return `${dateStr}（昨日）`;
+  if (diff === 2) return `${dateStr}（前日）`;
+  const wd = ['日','一','二','三','四','五','六'][d.getDay()];
+  return `${dateStr}（週${wd}）`;
+}
+
+// ── Chart.js（含 hover 高亮 plugin）──────────────
+let lastHoveredIdx = -1;  // 記住上次 hover 的 dataset，避免重複 update
+
+const highlightPlugin = {
+  id: 'legendHover',
+  beforeEvent(chart, args) {
+    const evt = args.event;
+    if (evt.type !== 'mousemove') return;
+
+    // 偵測線條 hover
+    const elements = chart.getElementsAtEventForMode(
+      evt, 'dataset', { intersect: false }, false
+    );
+    let activeIdx = elements.length > 0 ? elements[0].datasetIndex : -1;
+
+    // 偵測 legend hover
+    const leg = chart.legend;
+    if (leg && leg.legendHitBoxes) {
+      for (let i = 0; i < leg.legendHitBoxes.length; i++) {
+        const hb = leg.legendHitBoxes[i];
+        if (evt.x >= hb.left && evt.x <= hb.left + hb.width &&
+            evt.y >= hb.top  && evt.y <= hb.top + hb.height) {
+          activeIdx = i;
+          break;
+        }
+      }
+    }
+
+    // 只有 hover 目標改變時才重繪
+    if (activeIdx === lastHoveredIdx) return;
+    lastHoveredIdx = activeIdx;
+
+    chart.data.datasets.forEach((ds, i) => {
+      if (activeIdx === -1) {
+        ds.borderWidth = 2;
+        ds.pointRadius = 2.5;
+        ds.borderColor = storeColor(ds.label);
+      } else if (i === activeIdx) {
+        ds.borderWidth = 4.5;
+        ds.pointRadius = 4.5;
+        ds.borderColor = storeColor(ds.label);
+      } else {
+        ds.borderWidth = 1;
+        ds.pointRadius = 1.5;
+        ds.borderColor = storeColor(ds.label) + '40';
+      }
+    });
+    chart.update('none');
+  }
+};
+
+const ctx = document.getElementById('chart').getContext('2d');
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: { datasets: [] },
+  plugins: [highlightPlugin],
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { intersect: false, mode: 'nearest' },
+    scales: {
+      x: {
+        type: 'time',
+        time: {
+          parser: 'yyyy-MM-dd HH:mm:ss',
+          unit: 'minute',
+          tooltipFormat: 'HH:mm',
+          displayFormats: {
+            second: 'HH:mm', minute: 'HH:mm', hour: 'HH:mm'
+          }
+        },
+        title: { display: true, text: '時間', color: '#999' },
+        ticks: {
+          color: '#999',
+          maxTicksLimit: 12,
+          autoSkip: true,
+          callback: function(value) {
+            const d = new Date(value);
+            return String(d.getHours()).padStart(2,'0') + ':' +
+                   String(d.getMinutes()).padStart(2,'0');
+          }
+        },
+        grid: { color: 'rgba(0,0,0,.05)' },
+      },
+      y: {
+        beginAtZero: true,
+        title: { display: true, text: '分鐘', color: '#999' },
+        ticks: { color: '#999', stepSize: 5, precision: 0 },
+        grid: { color: 'rgba(0,0,0,.05)' },
+      }
+    },
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { boxWidth: 12, padding: 14, font: { size: 12 } },
+        // 點擊 legend = 單選那間店（再點一次 = 全部）
+        onClick(evt, item, legend) {
+          const name = item.text;
+          if (selectedStore === name) {
+            setFilter('__all__');
+          } else {
+            setFilter(name);
+          }
+        }
+      },
+      tooltip: {
+        backgroundColor: 'rgba(60,30,10,0.9)',
+        titleFont: { size: 12 }, bodyFont: { size: 13 },
+        mode: 'nearest',
+        intersect: false,
+        callbacks: {
+          title: function(items) {
+            if (!items.length) return '';
+            const raw = items[0].raw || items[0].element || {};
+            const x = raw.x || items[0].label || '';
+            return String(x).replace(/:\d{2}$/, '');
+          },
+          label: c => c.dataset.label + ': ' + c.parsed.y + ' 分鐘'
+        }
+      }
+    }
+  }
+});
+
+// ── 工具 ─────────────────────────────────────────
+function createEl(tag, text, className) {
+  const el = document.createElement(tag);
+  if (text != null) el.textContent = text;
+  if (className) el.className = className;
+  return el;
+}
+
+function heatClass(wt) {
+  const n = Number(wt);
+  if (isNaN(n) || wt === '-1') return 'idle';
+  if (n >= 40) return 'hot';
+  if (n >= 15) return 'warm';
+  return 'cool';
+}
+
+// ── 篩選控制 ─────────────────────────────────────
+function setFilter(storeName) {
+  selectedStore = storeName;
+  document.getElementById('chartFilter').value = storeName;
+  document.getElementById('tableFilter').value = storeName;
+  // 更新卡片 selected 狀態
+  document.querySelectorAll('.store-card').forEach(card => {
+    const cn = card.dataset.store;
+    card.classList.toggle('selected', storeName !== '__all__' && cn === storeName);
+  });
+  renderChart();
+  renderTable();
+}
+
+function populateDropdowns(storeNames) {
+  const chartSel = document.getElementById('chartFilter');
+  const tableSel = document.getElementById('tableFilter');
+
+  // 記住目前的值
+  const curVal = selectedStore;
+
+  // 清除舊選項（保留第一個「全部」）
+  while (chartSel.options.length > 1) chartSel.remove(1);
+  while (tableSel.options.length > 1) tableSel.remove(1);
+
+  for (const name of storeNames) {
+    chartSel.appendChild(new Option(name, name));
+    tableSel.appendChild(new Option(name, name));
+  }
+
+  chartSel.value = curVal;
+  tableSel.value = curVal;
+}
+
+document.getElementById('chartFilter').addEventListener('change', function() {
+  setFilter(this.value);
+});
+document.getElementById('tableFilter').addEventListener('change', function() {
+  setFilter(this.value);
+});
+
+// ── 分組工具 ─────────────────────────────────────
+function groupByStore(rows) {
+  const byStore = {};
+  for (const r of rows) {
+    const name = r.store_name;
+    if (!byStore[name]) byStore[name] = [];
+    byStore[name].push(r);
+  }
+  return byStore;
+}
+
+// 把 unix timestamp 格式化成台北時間 HH:MM（不是訪客的當地時間）
+function fmtStopTime(unixTs) {
+  if (!unixTs || unixTs === 0) return null;
+  return taipeiClock(new Date(unixTs * 1000 + 8 * 3600 * 1000));
+}
+
+// 依停止取號時間判斷熱度（越早 = 越熱），同樣以台北時間為準
+function stopTimeHeat(unixTs) {
+  if (!unixTs) return 'unset';
+  const d = new Date(unixTs * 1000 + 8 * 3600 * 1000);
+  const h = d.getUTCHours() + d.getUTCMinutes() / 60;
+  if (h < 18.5) return 'hot';
+  if (h < 19.0) return 'warm';
+  return '';
+}
+
+// ── 渲染：卡片（用 /api/latest 給每店「現在」的值）───
+function renderCards(latestList) {
+  const overview = document.getElementById('overview');
+  overview.replaceChildren();
+
+  for (const r of latestList) {
+    const name = r.store_name;
+    const wt = r.wait_time;
+    const isClosed = wt === '-1';
+
+    const card = document.createElement('div');
+    card.className = 'store-card ' + heatClass(wt);
+    if (selectedStore !== '__all__' && selectedStore === name) {
+      card.classList.add('selected');
+    }
+    card.dataset.store = name;
+
+    card.addEventListener('click', () => {
+      setFilter(selectedStore === name ? '__all__' : name);
+    });
+
+    card.appendChild(createEl('div', name, 'name'));
+    if (isClosed) {
+      const wrap = createEl('div', null, 'closed');
+      wrap.appendChild(createEl('span', '尚未營業', 'wait'));
+      card.appendChild(wrap);
+    } else {
+      card.appendChild(createEl('span', wt, 'wait'));
+      card.appendChild(createEl('span', ' 分鐘', 'unit'));
+    }
+
+    // 預計停止取號時間
+    const stopStr = fmtStopTime(r.last_time);
+    const stopDiv = document.createElement('div');
+    const heat = stopTimeHeat(r.last_time);
+    stopDiv.className = 'stop-time ' + heat;
+    if (stopStr) {
+      stopDiv.appendChild(createEl('span', '止號 ', 'label'));
+      stopDiv.appendChild(createEl('span', stopStr));
+    } else {
+      stopDiv.textContent = '止號 尚未設定';
+    }
+    card.appendChild(stopDiv);
+
+    overview.appendChild(card);
+  }
+}
+
+// ── 把 changes 轉成 chart datasets（step line）───
+// 邏輯：每個 change event 是一個 (timestamp, wait_time)。
+// Chart.js 用 stepped:'before' → 線條會在 timestamp 時刻「跳」到新值。
+// 為了讓最後一段值有畫到「現在」，幫每店多補一個延伸點到當日最末。
+function buildChartDatasets(changes, dateStr) {
+  const byStore = {};
+  for (const r of changes) {
+    if (r.wait_time === '-1' || isNaN(Number(r.wait_time))) continue;
+    if (!byStore[r.store_name]) byStore[r.store_name] = [];
+    byStore[r.store_name].push({ x: r.timestamp, y: Number(r.wait_time) });
+  }
+
+  // 延伸線到當日最末（看歷史 = 當日 23:59:59；看今日 = 當下時間）
+  // 延伸到「台北的現在」，不是訪客當地的現在
+  const isToday = dateStr === todayStr();
+  const t = taipeiNow();
+  const tailStr = isToday
+    ? dateStr + ' ' +
+      String(t.getUTCHours()).padStart(2,'0') + ':' +
+      String(t.getUTCMinutes()).padStart(2,'0') + ':' +
+      String(t.getUTCSeconds()).padStart(2,'0')
+    : dateStr + ' 23:59:59';
+
+  const showStores = selectedStore === '__all__'
+    ? Object.keys(byStore)
+    : (byStore[selectedStore] ? [selectedStore] : []);
+
+  const datasets = [];
+  for (const name of showStores) {
+    const pts = byStore[name].slice();
+    // 補延伸點：用最後一個值延到 tail
+    if (pts.length > 0) {
+      pts.push({ x: tailStr, y: pts[pts.length - 1].y });
+    }
+    const color = storeColor(name);
+    datasets.push({
+      label: name,
+      data: pts,
+      borderColor: color,
+      backgroundColor: color + '20',
+      borderWidth: 2,
+      pointRadius: 3,
+      pointBackgroundColor: color,
+      stepped: 'before',  // 步階線：橫線維持到下個變化點才跳
+      fill: showStores.length === 1,
+    });
+  }
+  return datasets;
+}
+
+function renderChart() {
+  chart.data.datasets = buildChartDatasets(allRows, selectedDate);
+  chart.update('none');
+}
+
+// ── 渲染：表格（transition log）─────────────────
+const MAX_TABLE_ROWS = 500;
+
+function fmtDuration(min) {
+  if (min === null || min === undefined) return '—';
+  if (min < 60) return `${min} 分`;
+  const h = Math.floor(min / 60), m = min % 60;
+  return m === 0 ? `${h} 小時` : `${h}小時${m}分`;
+}
+
+function fmtChange(prev, next) {
+  const fmtVal = v => v === '-1' ? '未營業' : `${v}分`;
+  if (prev === null || prev === undefined) return fmtVal(next);  // 起點
+  return `${fmtVal(prev)} → ${fmtVal(next)}`;
+}
+
+function renderTable() {
+  const filtered = selectedStore === '__all__'
+    ? allRows
+    : allRows.filter(r => r.store_name === selectedStore);
+
+  const totalCount = filtered.length;
+  const showRows = totalCount > MAX_TABLE_ROWS
+    ? filtered.slice(-MAX_TABLE_ROWS)
+    : filtered;
+
+  const frag = document.createDocumentFragment();
+  for (let i = showRows.length - 1; i >= 0; i--) {
+    const r = showRows[i];
+    const tr = document.createElement('tr');
+
+    // 時間（含秒）
+    tr.appendChild(createEl('td', r.timestamp));
+    tr.appendChild(createEl('td', r.store_name));
+
+    // 變化欄：「-1 → 0」這種有顏色標示
+    const isOpening = r.prev_value === '-1' && r.wait_time !== '-1';
+    const isClosing = r.wait_time === '-1';
+    const cls = isOpening ? 'td-wait' : (isClosing ? 'td-closed' : 'td-wait');
+    tr.appendChild(createEl('td', fmtChange(r.prev_value, r.wait_time), cls));
+
+    tr.appendChild(createEl('td', fmtDuration(r.duration_min)));
+    frag.appendChild(tr);
+  }
+
+  document.getElementById('tableBody').replaceChildren(frag);
+
+  document.getElementById('totalRows').textContent =
+    totalCount > MAX_TABLE_ROWS
+      ? `${totalCount} 個變化（顯示最新 ${MAX_TABLE_ROWS}）`
+      : `${totalCount} 個變化`;
+  const n = taipeiNow();
+  document.getElementById('lastUpdate').textContent =
+    taipeiClock(n) + ':' + String(n.getUTCSeconds()).padStart(2, '0') + '（台北）';
+}
+
+// ── 主渲染 ──────────────────────────────────────
+function render(changesRows, latestList) {
+  allRows = changesRows;
+  // 下拉店家清單從 latestList 抽（因為 latest 一定有所有「目前活躍」的店）
+  const newStores = latestList.map(r => r.store_name);
+  if (newStores.join() !== knownStores.join()) {
+    knownStores = newStores;
+    populateDropdowns(knownStores);
+  }
+  renderCards(latestList);
+  renderChart();
+  renderTable();
+}
+
+// ── 定時拉資料 ──────────────────────────────────
+// Codex 2026-05-08 10:22 +08:00：前端輪詢加上 in-flight guard 與逾時取消，避免斷線時堆積未完成 fetch。
+const FETCH_TIMEOUT_MS = 10000;
+let refreshInFlight = false;
+let refreshController = null;
+
+async function fetchJson(url, signal) {
+  const resp = await fetch(url, { signal });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+// 歷史日優先讀本 repo 的靜態檔（不消耗 Worker 額度、且 CDN 快取友善）；
+// 沒有靜態檔才回頭問 Worker。今日一律走 Worker，因為資料還在長。
+async function fetchChanges(date, signal) {
+  if (date !== todayStr() && archiveDates.has(date)) {
+    try {
+      return await fetchJson(`${ARCHIVE_BASE}/${date}.json`, signal);
+    } catch (e) {
+      if (e.name === 'AbortError') throw e;
+      console.warn('archive miss, fallback to API:', date, e.message);
+    }
+  }
+  return fetchJson(`${API_BASE}/api/changes?date=${encodeURIComponent(date)}`, signal);
+}
+
+async function refresh(options = {}) {
+  if (refreshInFlight) {
+    if (!options.force) return;
+    if (refreshController) refreshController.abort();
+  }
+
+  refreshInFlight = true;
+  const requestDate = selectedDate;
+  const controller = new AbortController();
+  refreshController = controller;
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  try {
+    const [changes, latest] = await Promise.all([
+      fetchChanges(requestDate, controller.signal),
+      fetchJson(`${API_BASE}/api/latest`, controller.signal),
+    ]);
+    if (selectedDate === requestDate) render(changes, latest);
+  } catch (e) {
+    if (e.name !== 'AbortError') console.error('fetch error:', e);
+  } finally {
+    clearTimeout(timeoutId);
+    if (refreshController === controller) {
+      refreshInFlight = false;
+      refreshController = null;
+    }
+  }
+}
+
+let autoRefreshTimer = null;
+function setupAutoRefresh() {
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  autoRefreshTimer = null;   // 清掉後把變數也歸零，否則狀態看起來像還在跑
+  // 只在「今日」才自動刷新（歷史日資料不會變，省 CPU）
+  // 60 秒而非原本的 15 秒：後端 cron 本來就每 60 秒才寫一次，
+  // 15 秒輪詢有 3/4 是重複請求，白白吃掉與 MusicalMap 共用的帳號額度。
+  if (selectedDate === todayStr()) {
+    autoRefreshTimer = setInterval(refresh, 60000);
+  }
+}
+
+async function populateDateDropdown() {
+  try {
+    // 兩個來源合併：repo 靜態歷史檔 + Worker（今日與尚未匯出的日子）
+    const [archive, live] = await Promise.all([
+      fetchJson(`${ARCHIVE_BASE}/index.json`).catch(() => []),
+      fetchJson(`${API_BASE}/api/dates`).catch(() => []),
+    ]);
+    archiveDates = new Set(archive);
+    const t = todayStr();
+    const dates = [...new Set([...archive, ...live, t])].sort().reverse();
+
+    const sel = document.getElementById('dateFilter');
+    sel.replaceChildren();
+    for (const d of dates) {
+      sel.appendChild(new Option(dateLabel(d), d));
+    }
+    sel.value = selectedDate;
+  } catch (e) {
+    console.error('dates fetch error:', e);
+  }
+}
+
+document.getElementById('dateFilter').addEventListener('change', function() {
+  selectedDate = this.value;
+  // 保留分店篩選（切昨日 → 依然顯示同一家店的昨日資料）
+  refresh({ force: true });
+  setupAutoRefresh();  // 切歷史日就停 timer，切回今日就恢復
+});
+
+(async () => {
+  await populateDateDropdown();
+  refresh();
+  setupAutoRefresh();
+  // 每 10 分鐘重新掃日期清單（跨午夜後能自動出現新的今日選項）
+  setInterval(populateDateDropdown, 600000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+name = "dintaifung-queue"
+main = "src/index.js"
+# workerd binary 目前支援到 2026-08-11，設更新的日期會讓 runtime 拒絕啟動
+compatibility_date = "2026-08-11"
+
+# 帳號與 MusicalMap 共用（Dannynycc@gmail.com / Workers Free）。
+# 實測用量：MusicalMap 8/1-8/12 累計 566 requests，今日 43/100,000。
+# 本 Worker 預估每日 cron 900 次 + 前端讀取，離帳號共用的 10 萬上限有一個數量級以上餘裕。
+account_id = "23cd40a515c6f5c31960acd8dfffc4ee"
+
+[triggers]
+# UTC 01:00-15:59 = 台北 09:00-23:59，每分鐘一次，每天 900 次。
+# 不跑整天的理由：深夜店家已停止取號，wait_time 只會凍結在最後一個值，
+# 抓回來是重複資料，白白吃掉帳號共用額度與 D1 的 500 MB 空間。
+crons = ["* 1-15 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dintaifung"
+# 建立於 APAC 區域（離台灣近，寫入延遲低）
+database_id = "66ca7cb3-0dda-4c5c-bdeb-2b45d80b0aed"
+
+[observability]
+enabled = true

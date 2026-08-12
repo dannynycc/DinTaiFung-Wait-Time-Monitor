@@ -1,0 +1,16 @@
+{
+  "name": "dintaifung-queue-worker",
+  "version": "3.0.0",
+  "private": true,
+  "description": "鼎泰豐現場候位 — Cloudflare Worker 抓取器與唯讀 API",
+  "scripts": {
+    "dev": "wrangler dev --local --test-scheduled",
+    "schema:local": "wrangler d1 execute dintaifung --local --file=schema.sql",
+    "schema:remote": "wrangler d1 execute dintaifung --remote --file=schema.sql",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
