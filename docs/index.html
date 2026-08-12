@@ -22,13 +22,79 @@
     display: inline-flex; align-items: center; gap: 8px;
     margin-top: 10px; font-size: 13px; color: #5a3a1a;
   }
-  header .date-picker select {
+  /* ── 日曆式日期選擇 ─────────────────────────────
+     不用原生 <input type="date">：它的顯示語言跟瀏覽器走、不理頁面 lang，
+     而且無法標示「哪些日期有資料」—— 那正是這裡的重點。 */
+  .cal-wrap { position: relative; display: inline-block; }
+  .cal-btn {
     font-family: inherit; font-size: 13px;
-    padding: 4px 10px; border: 1px solid #d4c3aa;
+    padding: 5px 12px; border: 1px solid #d4c3aa;
     border-radius: 6px; background: #fff; color: #3a3a3a;
-    cursor: pointer; min-width: 140px;
+    cursor: pointer; min-width: 165px;
   }
-  header .date-picker select:focus { outline: 2px solid #8b4513; }
+  .cal-btn:hover { border-color: #b08860; }
+  .cal-btn:focus-visible { outline: 2px solid #8b4513; }
+  .cal-btn::after { content: ' ▾'; color: #b08860; }
+
+  .cal-popup {
+    position: absolute; z-index: 50; top: calc(100% + 6px); left: 50%;
+    transform: translateX(-50%);
+    background: #fff; border: 1px solid #d4c3aa; border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.14);
+    padding: 12px; width: 268px; text-align: center;
+  }
+  .cal-popup[hidden] { display: none; }
+
+  .cal-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 6px; margin-bottom: 8px;
+  }
+  .cal-head select {
+    font-family: inherit; font-size: 13px; font-weight: 600;
+    color: #8b4513; background: #fff;
+    border: 1px solid #e4d9c9; border-radius: 6px;
+    padding: 3px 6px; cursor: pointer; flex: 1;
+  }
+  .cal-nav {
+    font-family: inherit; font-size: 16px; line-height: 1;
+    width: 28px; height: 28px; flex: none;
+    border: 1px solid #e4d9c9; border-radius: 6px;
+    background: #fff; color: #8b4513; cursor: pointer;
+  }
+  .cal-nav:hover { background: #faf6f1; }
+
+  .cal-dow, .cal-grid {
+    display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px;
+  }
+  .cal-dow span { font-size: 11px; color: #b08860; padding: 2px 0; }
+
+  .cal-day {
+    font-family: inherit; font-size: 12.5px;
+    height: 30px; border: 1px solid transparent; border-radius: 6px;
+    background: transparent; padding: 0;
+  }
+  /* 無資料：灰、不可點。用「能不能點」本身當作最直接的訊號。 */
+  .cal-day.none { color: #d2cabe; cursor: default; }
+  /* 有資料：實心淡底 + 深色字，一眼掃得出哪幾天有 */
+  .cal-day.has {
+    color: #5a3a1a; background: #f2e7d6; cursor: pointer; font-weight: 600;
+  }
+  .cal-day.has:hover { background: #e6d5bb; }
+  .cal-day.today { border-color: #b08860; }
+  .cal-day.sel { background: #8b4513; color: #fff; }
+  .cal-day.sel:hover { background: #7a3d11; }
+  .cal-day.empty { visibility: hidden; }
+
+  .cal-foot {
+    display: flex; justify-content: center; gap: 10px;
+    margin-top: 10px; padding-top: 8px; border-top: 1px solid #f0e6d8;
+    font-size: 10.5px; color: #999;
+  }
+  .cal-key { display: inline-flex; align-items: center; gap: 4px; }
+  .cal-key i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+  .cal-key .k-has { background: #f2e7d6; }
+  .cal-key .k-none { background: #f6f4f0; border: 1px solid #eee; }
+  .cal-key .k-today { border: 1px solid #b08860; }
 
   /* 即時總覽卡片 */
   .overview {
@@ -292,7 +358,23 @@
   <div class="sub">資料每 60 秒更新（圖表為步階線，只在等候變化時跳）| 點卡片可篩選</div>
   <div class="date-picker">
     <label>日期：</label>
-    <select id="dateFilter"></select>
+    <div class="cal-wrap">
+      <button type="button" id="dateBtn" class="cal-btn" aria-haspopup="dialog" aria-expanded="false">—</button>
+      <div id="calPopup" class="cal-popup" role="dialog" aria-label="選擇日期" hidden>
+        <div class="cal-head">
+          <button type="button" class="cal-nav" id="calPrev" aria-label="上個月">‹</button>
+          <select id="calMonthSel" aria-label="快速跳到有資料的月份"></select>
+          <button type="button" class="cal-nav" id="calNext" aria-label="下個月">›</button>
+        </div>
+        <div class="cal-dow"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+        <div class="cal-grid" id="calGrid"></div>
+        <div class="cal-foot">
+          <span class="cal-key"><i class="k-has"></i>有資料</span>
+          <span class="cal-key"><i class="k-none"></i>無資料</span>
+          <span class="cal-key"><i class="k-today"></i>今日</span>
+        </div>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -1180,6 +1262,119 @@ function setupAutoRefresh() {
   }
 }
 
+// ── 日曆式日期選擇 ──────────────────────────────
+// 「有無資料」的呈現刻意做兩層：顏色（實心淡底 vs 灰）＋ 能不能點。
+// 只靠顏色的話，色弱使用者與縮圖狀態下分不出來；把它綁到互動能力上，
+// 就算完全看不出顏色差異，點下去沒反應也立刻知道那天沒有資料。
+let availableDates = new Set();
+let calMonth = todayStr().slice(0, 7);   // 目前顯示的月份 YYYY-MM
+
+const pad2 = (n) => String(n).padStart(2, '0');
+const ymd = (y, m, d) => `${y}-${pad2(m)}-${pad2(d)}`;
+// 一律用 UTC 數學。new Date(y, m, d) 會走瀏覽器時區，
+// 對非台灣訪客會讓整個月份的格子錯開一天。
+const daysInMonth = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+const firstDow = (y, m) => new Date(Date.UTC(y, m - 1, 1)).getUTCDay();
+
+function renderDateButton() {
+  document.getElementById('dateBtn').textContent = dateLabel(selectedDate);
+}
+
+function renderMonthOptions() {
+  const counts = {};
+  for (const d of availableDates) {
+    const m = d.slice(0, 7);
+    counts[m] = (counts[m] || 0) + 1;
+  }
+  const months = new Set(Object.keys(counts));
+  months.add(calMonth);                       // 目前翻到的月份就算沒資料也要在選單裡
+  const list = [...months].sort().reverse();
+  const sel = document.getElementById('calMonthSel');
+  sel.replaceChildren();
+  for (const m of list) {
+    const [y, mm] = m.split('-');
+    const n = counts[m] || 0;
+    sel.appendChild(new Option(`${y} 年 ${Number(mm)} 月${n ? `（${n} 天）` : '（無）'}`, m));
+  }
+  sel.value = calMonth;
+}
+
+function renderCalendar() {
+  renderMonthOptions();
+  const [y, m] = calMonth.split('-').map(Number);
+  const today = todayStr();
+  const frag = document.createDocumentFragment();
+
+  for (let i = 0; i < firstDow(y, m); i++) {
+    frag.appendChild(createEl('div', '', 'cal-day empty'));
+  }
+  for (let d = 1; d <= daysInMonth(y, m); d++) {
+    const iso = ymd(y, m, d);
+    const has = availableDates.has(iso);
+    const isToday = iso === today;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = String(d);
+    btn.className = 'cal-day ' + (has ? 'has' : 'none')
+      + (isToday ? ' today' : '') + (iso === selectedDate ? ' sel' : '');
+    // 今日一律可點（就算資料還沒開始累積，也要能切過去看目前狀態）
+    if (has || isToday) {
+      btn.title = dateLabel(iso) + (has ? '' : '（今日，資料尚未開始累積）');
+      btn.addEventListener('click', () => pickDate(iso));
+    } else {
+      btn.disabled = true;
+      btn.title = `${iso}　無資料`;
+    }
+    frag.appendChild(btn);
+  }
+  document.getElementById('calGrid').replaceChildren(frag);
+}
+
+function pickDate(iso) {
+  selectedDate = iso;
+  closeCalendar();
+  renderDateButton();
+  refresh({ force: true });   // 保留分店篩選（切昨日 → 依然是同一家店的昨日資料）
+  setupAutoRefresh();         // 切歷史日就停 timer，切回今日就恢復
+}
+
+function openCalendar() {
+  calMonth = selectedDate.slice(0, 7);   // 每次打開都跳到目前選定日期的月份
+  renderCalendar();
+  document.getElementById('calPopup').hidden = false;
+  document.getElementById('dateBtn').setAttribute('aria-expanded', 'true');
+}
+
+function closeCalendar() {
+  document.getElementById('calPopup').hidden = true;
+  document.getElementById('dateBtn').setAttribute('aria-expanded', 'false');
+}
+
+function shiftMonth(delta) {
+  const [y, m] = calMonth.split('-').map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + delta, 1));
+  calMonth = `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
+  renderCalendar();
+}
+
+document.getElementById('dateBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (document.getElementById('calPopup').hidden) openCalendar();
+  else closeCalendar();
+});
+document.getElementById('calPrev').addEventListener('click', () => shiftMonth(-1));
+document.getElementById('calNext').addEventListener('click', () => shiftMonth(1));
+document.getElementById('calMonthSel').addEventListener('change', function () {
+  calMonth = this.value;
+  renderCalendar();
+});
+document.addEventListener('click', (e) => {
+  if (!document.querySelector('.cal-wrap').contains(e.target)) closeCalendar();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeCalendar();
+});
+
 async function populateDateDropdown() {
   try {
     // 兩個來源合併：repo 靜態歷史檔 + Worker（今日與尚未匯出的日子）
@@ -1192,26 +1387,15 @@ async function populateDateDropdown() {
         .catch(e => { console.warn('/api/dates 讀取失敗，歷史日期可能不完整:', e.message); return []; }),
     ]);
     archiveDates = new Set(archive);
-    const t = todayStr();
-    const dates = [...new Set([...archive, ...live, t])].sort().reverse();
-
-    const sel = document.getElementById('dateFilter');
-    sel.replaceChildren();
-    for (const d of dates) {
-      sel.appendChild(new Option(dateLabel(d), d));
-    }
-    sel.value = selectedDate;
+    // 只放「真的有資料」的日期。今日不硬塞 —— 它是否有資料由實際結果決定，
+    // 硬塞會讓日曆宣稱今天有資料，那又是一種謊報。今日仍可點，見 renderCalendar()。
+    availableDates = new Set([...archive, ...live]);
+    renderDateButton();
+    if (!document.getElementById('calPopup').hidden) renderCalendar();
   } catch (e) {
     console.error('dates fetch error:', e);
   }
 }
-
-document.getElementById('dateFilter').addEventListener('change', function() {
-  selectedDate = this.value;
-  // 保留分店篩選（切昨日 → 依然顯示同一家店的昨日資料）
-  refresh({ force: true });
-  setupAutoRefresh();  // 切歷史日就停 timer，切回今日就恢復
-});
 
 (async () => {
   // 先取得權威分店清單。有了它，即使某店抓取失敗、從 /api/latest 消失，

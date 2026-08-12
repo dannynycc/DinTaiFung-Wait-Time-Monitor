@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v3.9-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v4.0-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-08-12 23:46 +08:00（過濾上游 API 瞬間毛刺：8 天 5,356 事件中 30 筆，只影響繪圖不動資料）
+> 最後更新：2026-08-13 00:13 +08:00（日期選單改日曆並標示每日有無資料；修復我造成的 8/12 匯出檔截斷）
 
 ## 兩種跑法
 
