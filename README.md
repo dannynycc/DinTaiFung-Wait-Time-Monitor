@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v3.0-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v3.1-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-08-12 17:42 +08:00（上雲：Cloudflare Worker + D1 + GitHub Pages）
+> 最後更新：2026-08-12 18:44 +08:00（每日 roll-up：raw 轉事件流，D1 年限 1.6 年 → 20 年）
 
 ## 兩種跑法
 
@@ -113,8 +113,9 @@ pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
 ```
 .
 ├── worker/                   # ── 雲端版 ──
-│   ├── src/index.js          #   Worker：cron 抓取 + 唯讀 API
-│   ├── schema.sql            #   D1 schema（含 fetch_health 健康表）
+│   ├── src/index.js          #   Worker：cron 抓取 + 每日 roll-up + 唯讀 API
+│   ├── schema.sql            #   D1 schema（wait_log / wait_changes / stop_changes
+│   │                         #             / daily_summary / fetch_health）
 │   └── wrangler.toml         #   部署設定（cron 時段、D1 綁定）
 ├── docs/                     # GitHub Pages 站台
 │   ├── index.html            #   前端（時區已改為固定台北）
@@ -157,7 +158,36 @@ pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
 |---|---|
 | `GET /api/health` | 最近 20 次 cron 抓取紀錄（成功／失敗店數、耗時、錯誤訊息）。用來判斷「某段時間沒資料」是店家沒開還是排程掛了。 |
 
-雲端版沒有 `/api/data`（raw 逐筆），raw 只留在 D1 供內部使用。
+| `GET /api/summary?date=` | 每日彙總（roll-up 產物）：當日最長候位、各桌型首末叫號、原 raw 筆數 |
+| `GET /api/stops` | 止號時間事件流 |
+
+雲端版沒有 `/api/data`（raw 逐筆），raw 只在 D1 保留約 2–3 天供 `/api/latest` 使用。
+
+## 每日 roll-up：raw 怎麼被壓成 1/13
+
+raw 當天完整收集（前端卡片需要叫號與止號），過保留期後轉成「只留變化的地方」再刪除。
+
+關鍵在**不要對整列做判斷**。實測 25 天真實資料，各欄位每店每天的變動次數差了 180 倍：
+
+| 欄位 | 次數/店/天 | 處理方式 |
+|---|---|---|
+| `num_1` | 217.5 | 滾成每日彙總後丟棄 |
+| `num_2` | 148.7 | 同上 |
+| `togo_numbers` | 121.9 | 同上 |
+| `num_3` | 65.6 | 同上 |
+| `wait_time` | 53.3 | → `wait_changes` 完整事件流（無損） |
+| `num_4` | 37.0 | 滾成每日彙總後丟棄 |
+| `last_time` | **1.2** | → `stop_changes` 完整事件流（幾乎免費） |
+
+「任一欄位變了才記一筆」會被 `num_1` 這種叫號計數器綁架，只壓 2.57x。分開處理才有效：
+
+| 方案 | 每天成長 | D1 500 MB 可撐 |
+|---|---|---|
+| 不處理 | 881.0 KB | 1.6 年 |
+| 整列事件化 | 368.1 KB | 3.8 年 |
+| **每欄分開處理** | **68.5 KB** | **20 年** |
+
+`wait_time` 與 `last_time` 存成事件流是**無損**的 —— 兩者都是步階函數，記錄每次轉換就能完美還原任一分鐘的值。被真正丟棄的只有叫號的分鐘級細節，其衍生指標（當日叫了幾組）保存在 `daily_summary`。
 
 ## 資料 Schema
 

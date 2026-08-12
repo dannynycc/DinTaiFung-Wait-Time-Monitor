@@ -30,3 +30,4 @@ watchdog.log
 worker/node_modules/
 worker/.wrangler/
 worker/package-lock.json
+worker/.dev.vars

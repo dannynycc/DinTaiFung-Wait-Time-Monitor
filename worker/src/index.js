@@ -32,7 +32,11 @@ const STORES = [
 ];
 
 const FETCH_TIMEOUT_MS = 15000;
-const RAW_RETENTION_DAYS = 30;   // 見 pruneRawLog()
+
+// raw 保留天數。1 = 只留今天（一天結束就 roll-up）。
+// 用 2 是刻意留一天安全邊際：roll-up 是不可逆的，多留一天讓錯誤有機會被發現。
+const RAW_RETENTION_DAYS = 2;
+const ROLLUP_AT = '09:02';        // 台北時間；cron 視窗 09:00-23:59，這是每天最早能跑的時機
 
 // ── 時間 ──────────────────────────────────────────
 // Worker 一律跑 UTC。資料庫裡的時間戳全部是台北時間，格式 'YYYY-MM-DD HH:MM:SS'，
@@ -189,40 +193,76 @@ async function runCycle(env) {
 
   if (writeError) throw new Error(`D1 write failed: ${writeError}`);
 
-  // 4) 每天只在固定時刻修剪一次，避免每分鐘都跑 DELETE
-  if (ts.slice(11, 16) === '03:30') await pruneRawLog(env);
+  // 4) 每天只在固定時刻 roll-up 一次。放在每分鐘的路徑上會白白吃掉 CPU 額度
+  //    （cron 的 CPU 實測 7-8ms，Free 上限 10ms，餘裕本來就不多）。
+  //    時刻可用 env 覆寫，這樣本機測試能觸發同一條 production 程式碼路徑，
+  //    不必為了測試去改常數再改回來（改回來忘了就是事故）。
+  if (ts.slice(11, 16) === (env.ROLLUP_AT || ROLLUP_AT)) await rollupRawLog(env);
 
   return { ts, ok: results.length, fail: failures.length, changes: changes.length };
 }
 
 /**
- * 修剪 wait_log（raw 每分鐘快照）。
+ * 每日 roll-up：把過期的 raw 轉成「只留變化的地方」，然後刪掉 raw。
  *
- * 背景：raw 每天約 15,100 筆、約 1.5 MB。D1 免費方案單一資料庫上限 500 MB，
- * 不修剪大約 330 天就會撐爆。wait_changes（每天約 600-750 筆）很小，永久保留。
+ * 為什麼不是單純硬刪，也不是整列事件化：
+ *   實測 25 天真實資料，各欄位每店每天的變動次數差了 180 倍
+ *     num_1 217.5 / num_2 148.7 / togo 121.9 / num_3 65.6 / wait_time 53.3 / num_4 37.0
+ *     last_time 只有 1.2
+ *   「任一欄位變了才記一筆」被 num_1 這種計數器綁架，只壓 2.57x（257,049 → 100,034）。
+ *   分開處理才有效：wait_time 與 last_time 留完整事件流（無損，可還原每分鐘的值），
+ *   num_1~4 與 togo 滾成每日彙總。實測 881 KB/天 → 約 65 KB/天。
  *
- * 目前是最保守的做法：直接硬刪超過 RAW_RETENTION_DAYS 的 raw。
- * 這是可以調的取捨 —— 見下方 TODO。
+ * 三個 statement 放同一個 batch = 單一交易。推導失敗就不會刪到 raw。
  */
-async function pruneRawLog(env) {
-  const cutoff = daysAgoTaipei(RAW_RETENTION_DAYS);
-  await env.DB.prepare('DELETE FROM wait_log WHERE timestamp < ?').bind(cutoff).run();
+async function rollupRawLog(env) {
+  const cutoff = daysAgoTaipei(RAW_RETENTION_DAYS).slice(0, 10) + ' 00:00:00';
 
-  // TODO(Danny)：這裡的保留策略值得你自己決定，因為它直接決定未來還能做哪些分析。
-  //
-  //   選項 A（現況）硬刪 30 天前的 raw
-  //     最省空間。但 README「趨勢觀察筆記」提到的「凍結值」判斷需要看
-  //     連續的分鐘級資料，超過 30 天就再也回推不了。
-  //
-  //   選項 B  降頻取樣：超過 30 天的只留每 5 分鐘一筆
-  //     空間降為 1/5，仍看得出當日形狀。實作大致是
-  //       DELETE FROM wait_log
-  //        WHERE timestamp < ? AND CAST(substr(timestamp,15,2) AS INTEGER) % 5 != 0
-  //
-  //   選項 C  滾成每日彙總表（每店每天最大值／歸零時刻／停止取號時間）後再刪 raw
-  //     空間最省且保留長期趨勢，但當日細節永久消失。
-  //
-  // 選 B 或 C 的話改這個函式就好，其他地方不用動。
+  // 1) 止號時間事件流。
+  //    跨日邊界是這裡最容易寫錯的地方：每天只看得到當天的 raw，LAG() 在該店第一筆
+  //    會回 NULL，天真的寫法會誤判成「首次出現」而每天每店多產生一筆假事件。
+  //    因此 LAG 為 NULL 時要從既有 stop_changes 撈該店最後一個值接回來。
+  //    此 SQL 已用 25 天真實資料逐日模擬驗證，333 筆與獨立推導的 ground truth 逐筆一致。
+  const stopSql = `
+    INSERT INTO stop_changes (timestamp, store_id, store_name, last_time, prev_value)
+    SELECT timestamp, store_id, store_name, last_time, pv FROM (
+      SELECT w.timestamp, w.store_id, w.store_name, w.last_time,
+             COALESCE(
+               LAG(w.last_time) OVER (PARTITION BY w.store_id ORDER BY w.timestamp),
+               (SELECT s.last_time FROM stop_changes s
+                 WHERE s.store_id = w.store_id
+                 ORDER BY s.timestamp DESC LIMIT 1)
+             ) AS pv
+      FROM wait_log w
+      WHERE w.timestamp < ?
+    )
+    WHERE pv IS NULL OR last_time IS NOT pv
+    ORDER BY timestamp, store_id`;
+
+  // 2) 每日彙總。first/last 的差值就是當日該桌型叫了幾組。
+  const summarySql = `
+    INSERT OR REPLACE INTO daily_summary
+      (date, store_id, store_name, max_wait,
+       first_num_1, last_num_1, first_num_2, last_num_2,
+       first_num_3, last_num_3, first_num_4, last_num_4,
+       togo_states, first_ts, last_ts, raw_rows)
+    SELECT substr(timestamp,1,10), store_id, store_name,
+           MAX(CAST(wait_time AS INTEGER)),
+           MIN(CAST(num_1 AS INTEGER)), MAX(CAST(num_1 AS INTEGER)),
+           MIN(CAST(num_2 AS INTEGER)), MAX(CAST(num_2 AS INTEGER)),
+           MIN(CAST(num_3 AS INTEGER)), MAX(CAST(num_3 AS INTEGER)),
+           MIN(CAST(num_4 AS INTEGER)), MAX(CAST(num_4 AS INTEGER)),
+           COUNT(DISTINCT togo_numbers), MIN(timestamp), MAX(timestamp), COUNT(*)
+    FROM wait_log WHERE timestamp < ?
+    GROUP BY substr(timestamp,1,10), store_id`;
+
+  await env.DB.batch([
+    env.DB.prepare(stopSql).bind(cutoff),
+    env.DB.prepare(summarySql).bind(cutoff),
+    env.DB.prepare('DELETE FROM wait_log WHERE timestamp < ?').bind(cutoff),
+  ]);
+
+  console.log(`rollup done, cutoff=${cutoff}`);
 }
 
 // ── 唯讀 API ──────────────────────────────────────
@@ -278,6 +318,26 @@ async function handleApi(url, env) {
       SELECT DISTINCT substr(timestamp,1,10) AS d FROM wait_changes ORDER BY d DESC
     `).all();
     return json((results ?? []).map((r) => r.d));
+  }
+
+  if (path === '/api/summary') {
+    // 每日彙總（roll-up 產物）。不帶 date 就回全部，量很小：每天 11 筆。
+    const date = url.searchParams.get('date');
+    if (date && !DATE_RE.test(date)) return json({ error: 'bad date' }, 400);
+    const stmt = date
+      ? env.DB.prepare('SELECT * FROM daily_summary WHERE date = ? ORDER BY store_id').bind(date)
+      : env.DB.prepare('SELECT * FROM daily_summary ORDER BY date DESC, store_id LIMIT 500');
+    const { results } = await stmt.all();
+    return json(results ?? []);
+  }
+
+  if (path === '/api/stops') {
+    // 止號時間事件流。每店每天只變約 1.2 次，全部回傳也很輕。
+    const { results } = await env.DB.prepare(`
+      SELECT timestamp, store_id, store_name, last_time, prev_value
+      FROM stop_changes ORDER BY timestamp DESC LIMIT 1000
+    `).all();
+    return json(results ?? []);
   }
 
   if (path === '/api/health') {
