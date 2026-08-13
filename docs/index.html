@@ -972,8 +972,14 @@ function buildChartDatasets(changes, dateStr) {
       String(t.getUTCSeconds()).padStart(2,'0')
     : dateStr + ' 23:59:59';
 
+  // 圖例順序對齊卡片（= 官網門市順序）。不排的話會是「當天誰先出現變化」的
+  // 時間順序，每天都不一樣，也跟上方卡片對不起來。
+  const rank = (n) => {
+    const i = allStores.indexOf(n);
+    return i === -1 ? 99 : i;
+  };
   const showStores = selectedStore === '__all__'
-    ? Object.keys(byStore)
+    ? Object.keys(byStore).sort((a, b) => rank(a) - rank(b))
     : (byStore[selectedStore] ? [selectedStore] : []);
 
   const datasets = [];

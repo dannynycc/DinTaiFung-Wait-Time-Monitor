@@ -16,20 +16,31 @@
 
 const API_URL = 'https://www.dintaifung.tw/Queue/Home/WebApiTest';
 
-// 信義店長期回傳「無提供內用」或 -1，永久排除（沿用 app.py 的判斷）
+// 排列順序對齊鼎泰豐官網門市頁由上而下的順序：
+//   https://www.dintaifung.com.tw/store.php
+//   信義店 → 復興店 → 天母店 → 101店 → 南西店 → A4店 → A13店
+//        → 新生店 → 板橋店 → 新竹店 → 台中店 → 高雄店
+// （2026-08-13 以真瀏覽器讀取渲染後的 DOM 取得，並用「文字中首次出現位置」
+//   第二種方法交叉驗證，兩者一致。官網為 JS 渲染，curl 抓不到門市清單。）
+//
+// 信義店長期回傳「無提供內用」或 -1，永久排除（沿用 app.py 的判斷）。
+//
+// 這個陣列的順序就是前端卡片、篩選下拉與圖表圖例的顯示順序 ——
+// 不要為了「看起來整齊」改回依 store_id 排序。
 const STORES = [
   { id: '0003', name: '復興店' },
   { id: '0005', name: '天母店' },
-  { id: '0006', name: '新竹店' },
   { id: '0007', name: '101店' },
-  { id: '0008', name: '台中店' },
-  { id: '0009', name: '板橋店' },
-  { id: '0010', name: '高雄店' },
   { id: '0011', name: '南西店' },
   { id: '0012', name: 'A4店' },
   { id: '0013', name: 'A13店' },
   { id: '0015', name: '新生店' },
+  { id: '0009', name: '板橋店' },
+  { id: '0006', name: '新竹店' },
+  { id: '0008', name: '台中店' },
+  { id: '0010', name: '高雄店' },
 ];
+const STORE_ORDER = new Map(STORES.map((s, i) => [s.id, i]));
 
 const FETCH_TIMEOUT_MS = 15000;
 
@@ -389,9 +400,14 @@ async function handleApi(url, env) {
              togo_numbers, last_time, MAX(timestamp) AS timestamp
       FROM wait_log
       WHERE timestamp >= (SELECT datetime(MAX(timestamp), '-6 hours') FROM wait_log)
-      GROUP BY store_id ORDER BY store_id
+      GROUP BY store_id
     `).all();
-    return json(results ?? []);
+    // 依官網門市順序回傳，而不是 store_id。前端雖然以 /api/stores 當權威清單，
+    // 但 /api/stores 取不到時會退回用這裡的順序，兩邊一致才不會忽然變成 ID 序。
+    const rows = (results ?? []).slice().sort(
+      (a, b) => (STORE_ORDER.get(a.store_id) ?? 99) - (STORE_ORDER.get(b.store_id) ?? 99)
+    );
+    return json(rows);
   }
 
   if (path === '/api/changes') {

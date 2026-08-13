@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v4.1-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v4.2-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-08-13 10:28 +08:00（X 軸格線固定 30 分鐘，只標整點 + 結尾 21:30）
+> 最後更新：2026-08-13 10:40 +08:00（分店排列順序對齊官網門市頁）
 
 ## 兩種跑法
 
@@ -205,6 +205,10 @@ duration_min       -- 前一個值持續了多少分鐘
 ```
 
 ## 分店對照
+
+> 下表依 storeId 排序便於查照。**畫面上的顯示順序不同** —— 卡片、圖表圖例與兩個篩選下拉一律對齊[鼎泰豐官網門市頁](https://www.dintaifung.com.tw/store.php)由上而下的順序：
+> 復興 → 天母 → 101 → 南西 → A4 → A13 → 新生 → 板橋 → 新竹 → 台中 → 高雄。
+> 權威來源是 `worker/src/index.js` 的 `STORES` 陣列，前端四處全部從它衍生。
 
 | storeId | 分店 |
 |---|---|
