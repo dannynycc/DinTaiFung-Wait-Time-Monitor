@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v4.5-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v4.6-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-08-13 11:32 +08:00（日曆加入「跳到今日」按鈕）
+> 最後更新：2026-08-13 12:02 +08:00（可及性與 metadata：鍵盤可操作卡片、對比度、手機表格、觸控目標、OG/favicon）
 
 ## 兩種跑法
 
