@@ -162,13 +162,21 @@
     font-size: 13px; font-weight: 600;
     color: #5a3a1a; margin-bottom: 6px;
   }
-  .store-card .wait { font-size: 28px; font-weight: 700; color: #8b4513; }
+  /* 候位分鐘數是整張卡最重要的資訊，所以是卡片上最深的元素 —— 原本用主題棕
+     #8b4513（對比 7.1），比店名 #5a3a1a 還淺，視覺層級是反的：眼睛會先被
+     比較不重要的小字吸走。改為暖調近黑（對比 15.75），層級才正過來。
+     這裡刻意「不」用各分店的顏色：顏色在這張卡已經代表「哪一家店」（左側
+     色帶），數字再用一次是重複編碼，而且會妨礙跨卡片比大小 —— 讀者得先解碼
+     顏色才能讀數值。實測各分店色套在數字上，A13店僅 2.74，低於大字 3:1 門檻。 */
+  .store-card .wait { font-size: 28px; font-weight: 700; color: #2b2118; }
   .store-card .unit { font-size: 11px; color: #8a6534; }
   /* 卡片是 role=button，鍵盤聚焦要看得出來 */
   .store-card:focus-visible {
     outline: 3px solid #8b4513; outline-offset: 2px;
   }
-  .store-card .closed .wait { font-size: 14px; color: #bbb; }
+  /* 「已停止內用取號」等非數值狀態：原為 #bbb，對比僅 1.9 且是純灰。
+     改用暖調的柔和棕灰（對比 5.3）—— 仍明顯比營業中的數字弱，但讀得到。 */
+  .store-card .closed .wait { font-size: 14px; color: #6f6558; }
   .store-card .stop-time {
     margin-top: 6px;
     font-size: 11px;

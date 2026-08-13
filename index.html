@@ -51,9 +51,12 @@
     font-size: 13px; font-weight: 600;
     color: #5a3a1a; margin-bottom: 6px;
   }
-  .store-card .wait { font-size: 28px; font-weight: 700; color: #8b4513; }
+  /* 候位分鐘數是卡片上最重要的資訊，改為暖調近黑使其成為最深的元素
+     （原本主題棕比店名還淺，視覺層級是反的）。詳見 docs/index.html。 */
+  .store-card .wait { font-size: 28px; font-weight: 700; color: #2b2118; }
   .store-card .unit { font-size: 11px; color: #b08860; }
-  .store-card .closed .wait { font-size: 14px; color: #bbb; }
+  /* 原為 #bbb，對比僅 1.9 且是純灰；改用暖調柔和棕灰（對比 5.3）。 */
+  .store-card .closed .wait { font-size: 14px; color: #6f6558; }
   .store-card .stop-time {
     margin-top: 6px;
     font-size: 11px;
