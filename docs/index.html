@@ -671,19 +671,24 @@ const highlightPlugin = {
 // 在每條線的末端直接寫上「店名 50 分鐘」，用該店自己的顏色。
 // 比對照下方圖例快得多：不必記「橘色是哪家」，答案就在線的旁邊。
 //
-// 兩個必須處理的問題：
-//   1. 同一個候位分鐘數的分店，標籤的 y 完全相同（今日就有 60 分鐘兩家、
-//      30 分鐘兩家、65 分鐘兩家）。解法是「y 一律不動，同高的往右排開」——
-//      標籤因此永遠貼在自己那條線的高度上，不需要引導線也認得出誰是誰。
-//      （先前版本改用垂直推開，結果標籤離開自己的線、還會被推出繪圖區。）
-//   2. 歷史日的線會延伸到當日終點（23:59:59），落在繪圖區右緣之外，
-//      直接用末端點的座標會把標籤畫到看不見的地方 —— 必須夾在繪圖區內。
-//      這種日子右側只剩保留的 padding，往右排不下時改為往左排，
-//      白色描邊足以讓標籤壓在線條上仍然讀得到。
-const END_LABEL_MIN_V   = 12;     // y 相差小於此值視為同高，需要水平錯開（px）
-const END_LABEL_OFFSET  = 8;      // 線尾到標籤左緣的水平距離（px）
-const END_LABEL_GAP_X   = 10;     // 同高標籤之間的水平間距（px）
+// 三條規則：
+//   1. y 一律採用該線末端的真實高度，全程不移動 —— 標籤永遠貼在自己的線上。
+//      （曾經改用垂直推開，結果標籤離開自己的線，還被推出繪圖區。）
+//   2. x 一律對齊同一條左邊界（所有線末端最右者 + 間距），像一欄清單。
+//      只有真的會相疊的標籤才往右讓開，讓開之後仍是接在同一列上。
+//      （曾經讓標籤「接在前一個之後」，結果高度相近但沒相疊的也被連鎖推開，
+//        整欄參差不齊。）
+//   3. 放不下就縮小字級，不讓標籤溢出畫布。
+const END_LABEL_OFFSET  = 8;      // 線末端到標籤左邊界的距離（px）
+const END_LABEL_GAP_X   = 10;     // 同一列的標籤之間的水平間距（px）
 const END_LABEL_NARROW  = 700;    // 低於此寬度改用精簡文字
+const END_LABEL_SIZE    = 11;     // 基準字級（px）
+const END_LABEL_SIZE_SM = 10;     // 窄畫面基準字級
+const END_LABEL_MIN_SZ  = 8;      // 縮小的下限，再小就讀不到了
+
+function endLabelFont(size) {
+  return `600 ${size}px system-ui, sans-serif`;
+}
 
 function endLabelText(name, value, narrow) {
   // 窄畫面省略單位：y 軸標題已經寫了「分鐘」，而 11 個標籤各帶單位
@@ -696,11 +701,35 @@ const endLabelsPlugin = {
 
   // 在繪圖區右側留出標籤的空間。放在 beforeLayout 才能影響 Chart.js
   // 計算繪圖區的大小；在繪製階段才改會來不及，標籤會被畫布邊緣裁掉。
+  //
+  // 要留多寬取決於「最寬的一列」，而那不必等到畫的時候才知道 ——
+  // 候位分鐘數相同的分店必然落在同一個高度，也就是同一列。
+  // 直接用資料把同值的分組量出來就行。
   beforeLayout(chart) {
     const narrow = chart.width < END_LABEL_NARROW;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.font = endLabelFont(narrow ? END_LABEL_SIZE_SM : END_LABEL_SIZE);
+    const rowWidth = new Map();   // 候位分鐘數 → 該列所有標籤並排的總寬
+    chart.data.datasets.forEach((ds, i) => {
+      if (!chart.isDatasetVisible(i)) return;
+      const v = ds.data[ds.data.length - 1]?.y;
+      if (!Number.isFinite(v)) return;
+      const w = ctx.measureText(endLabelText(ds.label, v, narrow)).width;
+      const cur = rowWidth.get(v);
+      rowWidth.set(v, cur === undefined ? w : cur + END_LABEL_GAP_X + w);
+    });
+    ctx.restore();
+    let need = 0;
+    for (const w of rowWidth.values()) need = Math.max(need, w);
+
+    // 上限 35%：極端情況（很多分店同值）不該讓標籤把圖表擠扁，
+    // 那時改由 afterDatasetsDraw 縮小字級來收拾。
+    const right = need > 0
+      ? Math.min(Math.ceil(need) + END_LABEL_OFFSET + 6, Math.round(chart.width * 0.35))
+      : 0;
     if (!chart.options.layout) chart.options.layout = {};
     const pad = chart.options.layout.padding;
-    const right = narrow ? 58 : 92;
     // 只動 right，保留其他方向既有的設定
     chart.options.layout.padding =
       (pad && typeof pad === 'object') ? { ...pad, right } : { right };
@@ -735,36 +764,56 @@ const endLabelsPlugin = {
     if (items.length === 0) return;
 
     ctx.save();
-    ctx.font = '600 11px system-ui, sans-serif';
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
 
-    // 水平排位：y 相同（或非常接近）的標籤依序往右排開。
-    // 由上而下、同高者由左而右處理，順序才穩定 —— 否則同一批資料
-    // 每次重繪的左右順序可能不同，畫面會跳。
-    const maxRight = chart.width - 2;
-    const placed = [];
-    items.sort((a, b) => a.y - b.y || a.endX - b.endX);
-    for (const it of items) {
-      const w = ctx.measureText(it.text).width;
-      let x = it.endX + END_LABEL_OFFSET;
-      const clash = placed.filter(p => Math.abs(p.y - it.y) < END_LABEL_MIN_V);
-      if (clash.length) {
-        x = Math.max(...clash.map(p => p.x2)) + END_LABEL_GAP_X;
-        // 右邊排不下（歷史日的線頂到右緣時只剩 padding 的寬度）就往左排
-        if (x + w > maxRight) {
-          x = Math.min(...clash.map(p => p.x1)) - END_LABEL_GAP_X - w;
+    // 共同左邊界：取所有線末端最右的那一個，整欄標籤都從這裡開始。
+    // 用最右者才不會有標籤壓在別條線的上方。
+    const commonX = Math.max(...items.map(it => it.endX)) + END_LABEL_OFFSET;
+
+    // 由上而下處理，順序才穩定 —— 否則同一批資料每次重繪的左右順序
+    // 可能不同，畫面會跳。
+    items.sort((a, b) => a.y - b.y || a.idx - b.idx);
+
+    // 排位：每個標籤都從共同左邊界開始；若與已放好的標籤相撞
+    //（垂直距離小於一行字高、水平又相交），就往右推到那個標籤之後。
+    //
+    // 不能改用「y 相近就歸成同一列、同列依序並排」—— 那會產生鏈式錯誤：
+    // y 差 11px 的併入同列、差 13px 的另開一列，但新列可能只離某個成員
+    // 2px，兩者都從左邊界起排就疊在一起。手機版（圖表矮、列距被壓縮）
+    // 實測就是這樣壞的。逐一對照所有已放好的標籤才不會有這個漏洞。
+    const layout = (size) => {
+      ctx.font = endLabelFont(size);
+      const lineH = size + 2;
+      const placed = [];
+      let rightMost = 0;
+      for (const it of items) {
+        const w = ctx.measureText(it.text).width;
+        let x = commonX;
+        for (let guard = 0; guard <= items.length; guard++) {
+          const hit = placed.find(p => Math.abs(p.y - it.y) < lineH &&
+                                       x < p.x2 && p.x1 < x + w);
+          if (!hit) break;
+          x = hit.x2 + END_LABEL_GAP_X;
         }
+        it.x = x;
+        placed.push({ x1: x, x2: x + w, y: it.y });
+        rightMost = Math.max(rightMost, x + w);
       }
-      it.x = x;
-      placed.push({ x1: x, x2: x + w, y: it.y });
-    }
+      return rightMost;
+    };
+
+    // 字級：縮到整批都放得下為止。beforeLayout 已經照基準字級留好空間，
+    // 通常不會觸發；只有在 35% 上限擋住留白、或近似高度的標籤擠成一列時才會縮。
+    let size = narrow ? END_LABEL_SIZE_SM : END_LABEL_SIZE;
+    while (size > END_LABEL_MIN_SZ && layout(size) > chart.width - 2) size -= 0.5;
+    layout(size);   // 用最終字級重算一次，確保 it.x 與 ctx.font 一致
 
     for (const it of items) {
       // 與線條的強調效果一致：有線被選中時，其餘標籤一起淡化，
       // 否則畫面上會出現「線淡了但標籤還很搶眼」的矛盾。
       const dim = lastHoveredIdx !== -1 && it.idx !== lastHoveredIdx;
-      // 白色描邊：往左排的標籤會壓在線條上，沒有描邊會糊成一團
+      // 白色描邊：標籤有機會落在線條或格線上方，沒有描邊會糊成一團
       ctx.lineWidth = 3;
       ctx.strokeStyle = 'rgba(255,255,255,.85)';
       ctx.strokeText(it.text, it.x, it.y);
