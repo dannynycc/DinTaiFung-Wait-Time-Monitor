@@ -186,8 +186,9 @@
   .store-card .stop-time .label { color: #6f6558; }
   .store-card .stop-time.hot { color: #c62828; font-weight: 600; }
   .store-card .stop-time.warm { color: #b35c00; }
-  /* 「止號 尚未設定」原本是 #ccc，對比僅 1.61 —— 幾乎看不見。
-     這是 README 稱為「熱度硬指標」的資訊，不該被淡到讀不到。 */
+  /* .unset 現在只用於「近期無成功抓取」與錯誤訊息 —— 這兩者都是使用者需要
+     知道的狀態，不該被淡到讀不到（原本是 #ccc，對比僅 1.61）。
+     「止號 尚未設定」已不再顯示：無值時整行不渲染。 */
   .store-card .stop-time.unset { color: #7d7367; font-style: italic; }
   /* 左側色帶＝這家分店在圖表裡的線條顏色（由 JS 依 STORE_COLORS 寫入）。
      原本是用紅／橘／綠表示等候時間長短，但圖表的顏色代表「哪一家分店」——
@@ -946,18 +947,18 @@ function renderCards(latestList) {
       card.appendChild(createEl('span', ' 分鐘', 'unit'));
     }
 
-    // 預計停止取號時間
+    // 預計停止取號時間 —— 只在真的有值時才顯示。
+    // 原本無值時會印「止號 尚未設定」，那是把資料模型的狀態直接攤給使用者看：
+    // 「這個欄位上游還沒填」對想吃小籠包的人沒有任何用處，只是佔掉一行。
+    // 有值時（例如「止號 21:00」）才有意義 —— 那是最晚要到店的時間。
     const stopStr = fmtStopTime(r.last_time);
-    const stopDiv = document.createElement('div');
-    const heat = stopTimeHeat(r.last_time);
-    stopDiv.className = 'stop-time ' + heat;
     if (stopStr) {
+      const stopDiv = document.createElement('div');
+      stopDiv.className = 'stop-time ' + stopTimeHeat(r.last_time);
       stopDiv.appendChild(createEl('span', '止號 ', 'label'));
       stopDiv.appendChild(createEl('span', stopStr));
-    } else {
-      stopDiv.textContent = '止號 尚未設定';
+      card.appendChild(stopDiv);
     }
-    card.appendChild(stopDiv);
 
     overview.appendChild(card);
   }

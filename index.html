@@ -677,18 +677,16 @@ function renderCards(latestList) {
       card.appendChild(createEl('span', ' 分鐘', 'unit'));
     }
 
-    // 預計停止取號時間
+    // 預計停止取號時間 —— 只在真的有值時才顯示。
+    // 無值時原本印「止號 尚未設定」，那對使用者沒有用處，只是佔掉一行。
     const stopStr = fmtStopTime(r.last_time);
-    const stopDiv = document.createElement('div');
-    const heat = stopTimeHeat(r.last_time);
-    stopDiv.className = 'stop-time ' + heat;
     if (stopStr) {
+      const stopDiv = document.createElement('div');
+      stopDiv.className = 'stop-time ' + stopTimeHeat(r.last_time);
       stopDiv.appendChild(createEl('span', '止號 ', 'label'));
       stopDiv.appendChild(createEl('span', stopStr));
-    } else {
-      stopDiv.textContent = '止號 尚未設定';
+      card.appendChild(stopDiv);
     }
-    card.appendChild(stopDiv);
 
     overview.appendChild(card);
   }
