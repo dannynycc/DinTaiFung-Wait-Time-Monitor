@@ -41,7 +41,7 @@
     transform: translateX(-50%);
     background: #fff; border: 1px solid #d4c3aa; border-radius: 10px;
     box-shadow: 0 6px 20px rgba(0,0,0,.14);
-    padding: 12px; width: 268px; text-align: center;
+    padding: 12px; width: 288px; text-align: center;
   }
   .cal-popup[hidden] { display: none; }
 
@@ -86,11 +86,21 @@
   .cal-day.empty { visibility: hidden; }
 
   .cal-foot {
-    display: flex; justify-content: center; gap: 10px;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
     margin-top: 10px; padding-top: 8px; border-top: 1px solid #f0e6d8;
-    font-size: 10.5px; color: #999;
+    font-size: 10.5px; color: #8a7a66;
   }
+  .cal-keys { display: inline-flex; gap: 8px; }
   .cal-key { display: inline-flex; align-items: center; gap: 4px; }
+  /* 按鈕文字用「跳到今日」而非「今日」—— 左側圖例已經有一個「今日」代表外框樣式，
+     兩個同名但意思不同的東西並排會讓人分不清哪個可以點。 */
+  .cal-today {
+    font-family: inherit; font-size: 11px; white-space: nowrap;
+    padding: 4px 9px; border: 1px solid #d4c3aa; border-radius: 6px;
+    background: #fff; color: #8b4513; cursor: pointer; flex: none;
+  }
+  .cal-today:hover { background: #faf6f1; border-color: #b08860; }
+  .cal-today:focus-visible { outline: 2px solid #8b4513; }
   .cal-key i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
   .cal-key .k-has { background: #f2e7d6; }
   .cal-key .k-none { background: #f6f4f0; border: 1px solid #eee; }
@@ -369,9 +379,12 @@
         <div class="cal-dow"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
         <div class="cal-grid" id="calGrid"></div>
         <div class="cal-foot">
-          <span class="cal-key"><i class="k-has"></i>有資料</span>
-          <span class="cal-key"><i class="k-none"></i>無資料</span>
-          <span class="cal-key"><i class="k-today"></i>今日</span>
+          <span class="cal-keys">
+            <span class="cal-key"><i class="k-has"></i>有資料</span>
+            <span class="cal-key"><i class="k-none"></i>無資料</span>
+            <span class="cal-key"><i class="k-today"></i>今日</span>
+          </span>
+          <button type="button" id="calToday" class="cal-today">跳到今日</button>
         </div>
       </div>
     </div>
@@ -1408,6 +1421,9 @@ document.getElementById('dateBtn').addEventListener('click', (e) => {
 });
 document.getElementById('calPrev').addEventListener('click', () => shiftMonth(-1));
 document.getElementById('calNext').addEventListener('click', () => shiftMonth(1));
+// 「跳到今日」走與點日期格完全相同的路徑，所以月份、按鈕文字、資料重載、
+// 自動刷新的啟停都會一致 —— 不另外寫一套邏輯，才不會兩邊行為漂移。
+document.getElementById('calToday').addEventListener('click', () => pickDate(todayStr()));
 document.getElementById('calMonthSel').addEventListener('change', function () {
   calMonth = this.value;
   renderCalendar();
