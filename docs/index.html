@@ -264,7 +264,8 @@
     border-bottom: 1px solid #eee; white-space: nowrap;
   }
   .td-wait { font-weight: 700; color: #8b4513; }
-  .td-closed { color: #bbb; font-style: italic; }
+  /* 與卡片的 .closed .wait 同一個症狀：原 #bbb 對比僅 1.9。同步改為 #6f6558。 */
+  .td-closed { color: #6f6558; font-style: italic; }
 
   /* 疑似上游瞬間毛刺：照常列出（表格是稽核紀錄），只是淡化並加註記 */
   tbody tr.glitch-row { opacity: .55; }
