@@ -467,13 +467,25 @@ const highlightPlugin = {
 //      只有真的會相疊的標籤才往右讓開，讓開之後仍是接在同一列上。
 //      （曾經讓標籤「接在前一個之後」，結果高度相近但沒相疊的也被連鎖推開，
 //        整欄參差不齊。）
-//   3. 放不下就縮小字級，不讓標籤溢出畫布。
+//   3. 同一個數值超過 2 家就收合成「8 家 0 分鐘」。理由見下。
+//   4. 放不下就縮小字級，不讓標籤溢出畫布。
 const END_LABEL_OFFSET  = 8;      // 線末端到標籤左邊界的距離（px）
 const END_LABEL_GAP_X   = 10;     // 同一列的標籤之間的水平間距（px）
 const END_LABEL_NARROW  = 700;    // 低於此寬度改用精簡文字
 const END_LABEL_SIZE    = 11;     // 基準字級（px）
 const END_LABEL_SIZE_SM = 10;     // 窄畫面基準字級
 const END_LABEL_MIN_SZ  = 8;      // 縮小的下限，再小就讀不到了
+// 同一個候位分鐘數最多逐一列出幾家，超過就收合。
+// 為什麼要收合：打烊前後常有一大批分店同時收在 0 分鐘（實測 2026-04-23 有
+// 8 家），逐一列出光那一列就要 700px，為了容納它得把右側留白撐到整張圖的
+// 三分之一 —— 犧牲資料去遷就標籤，本末倒置。而且那 8 條線在 0 分鐘上完全
+// 重疊，看圖的人本來就分不出哪條是哪條，列出 8 個店名並沒有多給任何資訊。
+//
+// 窄畫面收得更緊（只列 1 家）：390px 的畫布上兩個標籤並排就要 30% 的寬度，
+// 繪圖區會被壓到只剩 59% —— 跟桌機那個問題是同一回事，只是門檻更低。
+const END_LABEL_MAX_ROW    = 2;
+const END_LABEL_MAX_ROW_SM = 1;
+const END_LABEL_GROUP_COLOR = '#6f6558';   // 收合標籤代表多家分店，用中性色
 
 function endLabelFont(size) {
   return `600 ${size}px system-ui, sans-serif`;
@@ -485,6 +497,39 @@ function endLabelText(name, value, narrow) {
   return narrow ? `${name} ${value}` : `${name} ${value} 分鐘`;
 }
 
+function endLabelGroupText(count, value, narrow) {
+  return narrow ? `${count} 家 ${value}` : `${count} 家 ${value} 分鐘`;
+}
+
+// 把「同一個數值超過 END_LABEL_MAX_ROW 家」的收合成單一標籤。
+// 同值必然同高，所以這個分組跟畫面上的「列」是一致的。
+// beforeLayout（算留白）與 afterDatasetsDraw（實際繪製）共用同一套規則，
+// 否則會出現「留白照 8 個標籤算，畫出來卻只有 1 個」這種對不起來的情況。
+function endLabelGroups(entries, narrow) {
+  const maxRow = narrow ? END_LABEL_MAX_ROW_SM : END_LABEL_MAX_ROW;
+  const byValue = new Map();
+  for (const e of entries) {
+    const g = byValue.get(e.value);
+    if (g) g.push(e); else byValue.set(e.value, [e]);
+  }
+  const out = [];
+  for (const [value, g] of byValue) {
+    if (g.length <= maxRow) {
+      out.push(...g.map(e => ({ ...e, text: endLabelText(e.name, value, narrow) })));
+    } else {
+      out.push({
+        idx: -1,
+        value,
+        endX: Math.max(...g.map(e => e.endX)),
+        y: g[0].y,
+        color: END_LABEL_GROUP_COLOR,
+        text: endLabelGroupText(g.length, value, narrow),
+      });
+    }
+  }
+  return out;
+}
+
 const endLabelsPlugin = {
   id: 'endLabels',
 
@@ -493,29 +538,34 @@ const endLabelsPlugin = {
   //
   // 要留多寬取決於「最寬的一列」，而那不必等到畫的時候才知道 ——
   // 候位分鐘數相同的分店必然落在同一個高度，也就是同一列。
-  // 直接用資料把同值的分組量出來就行。
+  // 直接用資料把同值的分組量出來就行（收合規則與繪製階段共用）。
   beforeLayout(chart) {
     const narrow = chart.width < END_LABEL_NARROW;
     const ctx = chart.ctx;
-    ctx.save();
-    ctx.font = endLabelFont(narrow ? END_LABEL_SIZE_SM : END_LABEL_SIZE);
-    const rowWidth = new Map();   // 候位分鐘數 → 該列所有標籤並排的總寬
+    const entries = [];
     chart.data.datasets.forEach((ds, i) => {
       if (!chart.isDatasetVisible(i)) return;
       const v = ds.data[ds.data.length - 1]?.y;
       if (!Number.isFinite(v)) return;
-      const w = ctx.measureText(endLabelText(ds.label, v, narrow)).width;
-      const cur = rowWidth.get(v);
-      rowWidth.set(v, cur === undefined ? w : cur + END_LABEL_GAP_X + w);
+      entries.push({ idx: i, name: ds.label, value: v, endX: 0, y: 0 });
     });
+    ctx.save();
+    ctx.font = endLabelFont(narrow ? END_LABEL_SIZE_SM : END_LABEL_SIZE);
+    const rowWidth = new Map();   // 候位分鐘數 → 該列標籤並排的總寬
+    for (const g of endLabelGroups(entries, narrow)) {
+      const w = ctx.measureText(g.text).width;
+      const cur = rowWidth.get(g.value);
+      rowWidth.set(g.value, cur === undefined ? w : cur + END_LABEL_GAP_X + w);
+    }
     ctx.restore();
     let need = 0;
     for (const w of rowWidth.values()) need = Math.max(need, w);
 
-    // 上限 35%：極端情況（很多分店同值）不該讓標籤把圖表擠扁，
-    // 那時改由 afterDatasetsDraw 縮小字級來收拾。
+    // 上限 22%：收合之後最寬的一列頂多兩個標籤（窄畫面一個），正常不會碰到
+    // 這個上限；留著是防呆，真的碰到時改由 afterDatasetsDraw 縮小字級收拾。
+    // 多給 12px 餘裕，免得只差幾 px 就整批縮小字級。
     const right = need > 0
-      ? Math.min(Math.ceil(need) + END_LABEL_OFFSET + 6, Math.round(chart.width * 0.35))
+      ? Math.min(Math.ceil(need) + END_LABEL_OFFSET + 12, Math.round(chart.width * 0.22))
       : 0;
     if (!chart.options.layout) chart.options.layout = {};
     const pad = chart.options.layout.padding;
@@ -530,7 +580,7 @@ const endLabelsPlugin = {
     const narrow = chart.width < END_LABEL_NARROW;
 
     // 蒐集每條可見線的末端位置
-    const items = [];
+    const entries = [];
     chart.data.datasets.forEach((ds, i) => {
       if (!chart.isDatasetVisible(i)) return;
       const meta = chart.getDatasetMeta(i);
@@ -540,17 +590,21 @@ const endLabelsPlugin = {
       if (!last || !Number.isFinite(last.x) || !Number.isFinite(last.y)) return;
       const value = ds.data[ds.data.length - 1]?.y;
       if (!Number.isFinite(value)) return;
-      items.push({
+      entries.push({
         idx: i,
+        name: ds.label,
+        value,
         // 夾在繪圖區內：歷史日的線末端會超出右緣
         endX: Math.min(last.x, chartArea.right),
         // y 就是這條線末端的真實高度，全程不更動
         y: Math.min(Math.max(last.y, chartArea.top), chartArea.bottom),
         color: storeColor(ds.label),
-        text: endLabelText(ds.label, value, narrow),
       });
     });
-    if (items.length === 0) return;
+    if (entries.length === 0) return;
+
+    // 同值超過 2 家就收合成一個標籤（規則與 beforeLayout 共用）
+    const items = endLabelGroups(entries, narrow);
 
     ctx.save();
     ctx.textBaseline = 'middle';
