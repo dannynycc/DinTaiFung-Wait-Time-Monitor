@@ -395,21 +395,16 @@ let lastHoveredIdx = -1;
 let pendingHoverIdx = -1;
 let hoverRafId = 0;
 
+// hover 只改線的粗細與顏色，完全不碰圓點 —— 圓點在資料集設定裡就是 0
 function paintHighlight(chart, activeIdx) {
-  const singleStore = chart.data.datasets.length === 1;
   chart.data.datasets.forEach((ds, i) => {
     const meta = chart.getDatasetMeta(i);
+    if (!meta.dataset) return;
     const base = storeColor(ds.label);
     const isActive = i === activeIdx;
-    const width = activeIdx === -1 ? 2 : (isActive ? 4.5 : 1);
-    // hover 只改線的粗細與顏色，不動圓點；圓點只在單店檢視時顯示
-    const radius = singleStore ? 3 : 0;
-    const color = (activeIdx !== -1 && !isActive) ? base + '40' : base;
-    if (meta.dataset) {
-      meta.dataset.options.borderWidth = width;
-      meta.dataset.options.borderColor = color;
-    }
-    for (const pt of meta.data) pt.options.radius = radius;
+    meta.dataset.options.borderWidth = activeIdx === -1 ? 2 : (isActive ? 4.5 : 1);
+    meta.dataset.options.borderColor =
+      (activeIdx !== -1 && !isActive) ? base + '40' : base;
   });
   chart.render();
 }
@@ -721,7 +716,8 @@ function renderCards(latestList) {
 // 只影響圖表繪製，原始資料完全不動，表格照常列出並標示。
 const GLITCH_MAX_MIN = 1;
 const GLITCH_DROP_RATIO = 0.5;
-const GLITCH_MIN_DROP = 30;
+const GLITCH_SAME_DROP = 10;   // 前後值相同時的絕對落差門檻
+const GLITCH_DIFF_DROP = 30;   // 前後值不同時（較保守）
 let glitchSet = new Set();
 
 function findGlitches(rows) {
@@ -744,7 +740,9 @@ function findGlitches(rows) {
       const next = waitNumber(nxt.wait_time);
       if (prev !== null && next !== null) {
         const floor = Math.min(prev, next);
-        if (cur <= floor * GLITCH_DROP_RATIO && floor - cur >= GLITCH_MIN_DROP) found.add(e);
+        if (cur > floor * GLITCH_DROP_RATIO) continue;
+        const need = (e.prev_value === nxt.wait_time) ? GLITCH_SAME_DROP : GLITCH_DIFF_DROP;
+        if (floor - cur >= need) found.add(e);
       } else if (e.prev_value !== null && e.prev_value === nxt.wait_time && cur === 0) {
         found.add(e);
       }
@@ -801,10 +799,11 @@ function buildChartDatasets(changes, dateStr) {
       borderColor: color,
       backgroundColor: color + '20',
       borderWidth: 2,
-      // 多分店時不畫圓點：整天 600+ 個變化事件會蓋掉線條、看不出趨勢。
-      // 步階線的轉折本身已標示變化時刻，圓點是重複資訊。單店時才畫。
-      pointRadius: single ? 3 : 0,
-      pointHoverRadius: single ? 5 : 4,
+      // 一律不畫圓點（單店檢視也一樣）：步階線的轉折本身已標示變化時刻，
+      // 圓點是重複資訊；多店時更會直接蓋掉線條。
+      // 只保留 hover 時游標底下那一顆，當 tooltip 的錨點。
+      pointRadius: 0,
+      pointHoverRadius: 4,
       pointBackgroundColor: color,
       stepped: 'before',  // 步階線：橫線維持到下個變化點才跳
       fill: single,

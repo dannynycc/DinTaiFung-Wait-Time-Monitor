@@ -520,24 +520,17 @@ let lastHoveredIdx = -1;
 let pendingHoverIdx = -1;
 let hoverRafId = 0;
 
+// hover 只改線的粗細與顏色，完全不碰圓點 —— 圓點在資料集設定裡就是 0。
+// 少了逐點寫入，重繪成本又更低（11 條線約 600 個點元素不用再走一遍）。
 function paintHighlight(chart, activeIdx) {
-  const singleStore = chart.data.datasets.length === 1;
   chart.data.datasets.forEach((ds, i) => {
     const meta = chart.getDatasetMeta(i);
+    if (!meta.dataset) return;
     const base = storeColor(ds.label);
     const isActive = i === activeIdx;
-    const width = activeIdx === -1 ? 2 : (isActive ? 4.5 : 1);
-    // hover 只改線的粗細與顏色，不動圓點。
-    // 圓點是否顯示只取決於「是不是單店檢視」：多店時一律不畫（整天 600+ 個
-    // 變化事件會蓋掉線條），單店時一律畫。被指到的線加了圓點反而更雜，
-    // 加粗本身已經足夠辨識。
-    const radius = singleStore ? 3 : 0;
-    const color = (activeIdx !== -1 && !isActive) ? base + '40' : base;
-    if (meta.dataset) {
-      meta.dataset.options.borderWidth = width;
-      meta.dataset.options.borderColor = color;
-    }
-    for (const pt of meta.data) pt.options.radius = radius;
+    meta.dataset.options.borderWidth = activeIdx === -1 ? 2 : (isActive ? 4.5 : 1);
+    meta.dataset.options.borderColor =
+      (activeIdx !== -1 && !isActive) ? base + '40' : base;
   });
   chart.render();
 }
@@ -887,23 +880,32 @@ function renderCards(latestList) {
 // 為什麼不只看「等於 0」：實測 5 天 19 筆瞬間深谷，17 筆是 0、2 筆不是
 // （南西店 110 → 10 → 120、台中店 130 → 95 → 130），同一個物理不可能。
 //
-// 為什麼相對條件不夠、一定要加絕對門檻：只用「掉一半」時，跨 3 天實測發現它在
-// 低數值區大量誤殺 —— 5 → 0 → 5、8 → 0 → 8、10 → 0 → 10 全被判為毛刺。
-// 但 5 分鐘的隊伍排空一分鐘、再來一組客人，是每天都在發生的正常現象。
-// 官方以 5 分鐘為級距更新，一分鐘內掉 30 分鐘等於連跌 6 級再連漲 6 級，
-// 那才是物理上不可能的量級。
+// 絕對門檻分成兩級，關鍵差別是「有沒有跳回完全相同的值」：
+//
+//   前後值相同（例如 25 → 0 → 25）→ 門檻 10 分鐘
+//     隊伍不可能在 60 秒內清空、又剛好回到同一個數字。這個巧合本身就是強訊號，
+//     不需要很大的落差就能判定。
+//
+//   前後值不同（例如 110 → 10 → 120）→ 門檻 30 分鐘
+//     少了「回到同值」這個訊號，保守一點，要求落差夠大才判。
+//
+// 為什麼同值門檻是 10：實測 9 天 5,581 個事件，落差分布出現自然斷層 ——
+// 5 分×10 筆、8 分×4 筆，然後直接跳到 10 分以上。而官方以 5 分鐘為級距更新，
+// 落差 ≥10 代表一分鐘內連跌 2 級再連漲 2 級；5–8 分鐘的隊伍只有 1、2 組客人，
+// 一分鐘清空再來一組是每天都在發生的真事。門檻切在斷層上，兩邊都站得住。
 //
 // 刻意不抓的例子（都經實測確認是真實紀錄）：
-//   天母店 5 → 0 → 5      短隊真的排空（且 0 持續 13 分鐘）
+//   天母店 5 → 0 → 5      短隊真的排空，落差 5 低於同值門檻
+//   板橋店 8 → 0 → 8      同上
 //   新生店 -1 → 0 → 35    '-1' 是「尚未營業」，這是開店瞬間（開了還沒人 → 一次領號）
 //   台中店 130 → 95 → 130 只掉 27%，未過半
-//   板橋店 10 → 0 → 8     落差僅 8 分鐘，低於絕對門檻
 //
 // 只影響「圖表怎麼畫」。原始資料完全不動，變化事件表格照常列出並標示，
 // 因為那是稽核紀錄 —— 隱藏紀錄跟畫出不存在的線一樣不可接受。
-const GLITCH_MAX_MIN = 1;      // 這個值只持續幾分鐘才算「瞬間」
-const GLITCH_DROP_RATIO = 0.5; // 相對條件：掉到鄰居較小者的幾成以下
-const GLITCH_MIN_DROP = 30;    // 絕對條件：落差至少幾分鐘（防止低數值區誤殺）
+const GLITCH_MAX_MIN = 1;       // 這個值只持續幾分鐘才算「瞬間」
+const GLITCH_DROP_RATIO = 0.5;  // 相對條件：掉到鄰居較小者的幾成以下
+const GLITCH_SAME_DROP = 10;    // 前後值相同時的絕對落差門檻
+const GLITCH_DIFF_DROP = 30;    // 前後值不同時的絕對落差門檻（較保守）
 let glitchSet = new Set();
 
 function findGlitches(rows) {
@@ -927,9 +929,12 @@ function findGlitches(rows) {
       const next = waitNumber(nxt.wait_time);
 
       if (prev !== null && next !== null) {
-        // (a) 前後都是有效數值 → 相對與絕對兩個條件都要成立
+        // (a) 前後都是有效數值 → 相對條件先過，再依「是否跳回同值」選絕對門檻
         const floor = Math.min(prev, next);
-        if (cur <= floor * GLITCH_DROP_RATIO && floor - cur >= GLITCH_MIN_DROP) found.add(e);
+        if (cur > floor * GLITCH_DROP_RATIO) continue;
+        const sameValue = e.prev_value === nxt.wait_time;
+        const need = sameValue ? GLITCH_SAME_DROP : GLITCH_DIFF_DROP;
+        if (floor - cur >= need) found.add(e);
       } else if (e.prev_value !== null && e.prev_value === nxt.wait_time && cur === 0) {
         // (b) 前後是同一個非數值狀態（已停止內用取號 → 0 → 已停止內用取號）
         found.add(e);
@@ -1020,13 +1025,12 @@ function buildChartDatasets(changes, dateStr) {
       borderColor: color,
       backgroundColor: color + '20',
       borderWidth: 2,
-      // 全部分店時不畫點。整天的資料是 11 條線、600 多個變化事件 ——
-      // 每個事件都畫一個圓點會蓋掉線條本身，看不出趨勢（實測 2026-05-17
-      // 這天 626 個點）。步階線的轉折本來就標示了變化時刻，點是多餘的。
-      // 篩選單店時才畫點，因為那時每個點都看得清楚、也才有意義。
-      pointRadius: single ? 3 : 0,
-      // 點雖然不畫，滑到附近仍會浮出來，tooltip 的定位也不受影響
-      pointHoverRadius: single ? 5 : 4,
+      // 一律不畫圓點，單店檢視也一樣。步階線的轉折本身就標示了變化時刻，
+      // 圓點是重複資訊；多店時更會直接蓋掉線條（實測 2026-05-17 一天 626 個點）。
+      pointRadius: 0,
+      // 唯一例外：滑鼠移過去時，游標底下那一顆點會浮出來當 tooltip 的錨點。
+      // 只有一顆、只在 hover 時出現，不會讓線條變雜。
+      pointHoverRadius: 4,
       pointBackgroundColor: color,
       stepped: 'before',  // 步階線：橫線維持到下個變化點才跳
       fill: single,
