@@ -456,11 +456,92 @@ const highlightPlugin = {
   }
 };
 
+// ── 線尾直接標示（direct labeling）─────────────────
+// 在每條線的末端直接寫上「店名 50 分鐘」，用該店自己的顏色，不必回頭對照圖例。
+// y 一律採用該線末端的真實高度，絕不移動；同高的標籤改為往右排開，
+// 這樣標籤永遠貼著自己的線。詳細說明見 docs/index.html。
+const END_LABEL_MIN_V   = 12;
+const END_LABEL_OFFSET  = 8;
+const END_LABEL_GAP_X   = 10;
+const END_LABEL_NARROW  = 700;
+
+function endLabelText(name, value, narrow) {
+  return narrow ? `${name} ${value}` : `${name} ${value} 分鐘`;
+}
+
+const endLabelsPlugin = {
+  id: 'endLabels',
+  beforeLayout(chart) {
+    const narrow = chart.width < END_LABEL_NARROW;
+    if (!chart.options.layout) chart.options.layout = {};
+    const pad = chart.options.layout.padding;
+    const right = narrow ? 58 : 92;
+    chart.options.layout.padding =
+      (pad && typeof pad === 'object') ? { ...pad, right } : { right };
+  },
+  afterDatasetsDraw(chart) {
+    const { ctx, chartArea } = chart;
+    if (!chartArea) return;
+    const narrow = chart.width < END_LABEL_NARROW;
+
+    const items = [];
+    chart.data.datasets.forEach((ds, i) => {
+      if (!chart.isDatasetVisible(i)) return;
+      const pts = chart.getDatasetMeta(i).data;
+      if (!pts || pts.length === 0) return;
+      const last = pts[pts.length - 1];
+      if (!last || !Number.isFinite(last.x) || !Number.isFinite(last.y)) return;
+      const value = ds.data[ds.data.length - 1]?.y;
+      if (!Number.isFinite(value)) return;
+      items.push({
+        idx: i,
+        endX: Math.min(last.x, chartArea.right),
+        y: Math.min(Math.max(last.y, chartArea.top), chartArea.bottom),
+        color: storeColor(ds.label),
+        text: endLabelText(ds.label, value, narrow),
+      });
+    });
+    if (items.length === 0) return;
+
+    ctx.save();
+    ctx.font = '600 11px system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+
+    const maxRight = chart.width - 2;
+    const placed = [];
+    items.sort((a, b) => a.y - b.y || a.endX - b.endX);
+    for (const it of items) {
+      const w = ctx.measureText(it.text).width;
+      let x = it.endX + END_LABEL_OFFSET;
+      const clash = placed.filter(p => Math.abs(p.y - it.y) < END_LABEL_MIN_V);
+      if (clash.length) {
+        x = Math.max(...clash.map(p => p.x2)) + END_LABEL_GAP_X;
+        if (x + w > maxRight) {
+          x = Math.min(...clash.map(p => p.x1)) - END_LABEL_GAP_X - w;
+        }
+      }
+      it.x = x;
+      placed.push({ x1: x, x2: x + w, y: it.y });
+    }
+
+    for (const it of items) {
+      const dim = lastHoveredIdx !== -1 && it.idx !== lastHoveredIdx;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(255,255,255,.85)';
+      ctx.strokeText(it.text, it.x, it.y);
+      ctx.fillStyle = dim ? it.color + '40' : it.color;
+      ctx.fillText(it.text, it.x, it.y);
+    }
+    ctx.restore();
+  }
+};
+
 const ctx = document.getElementById('chart').getContext('2d');
 const chart = new Chart(ctx, {
   type: 'line',
   data: { datasets: [] },
-  plugins: [highlightPlugin],
+  plugins: [highlightPlugin, endLabelsPlugin],
   options: {
     responsive: true,
     maintainAspectRatio: false,
