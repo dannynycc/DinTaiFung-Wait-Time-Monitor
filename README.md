@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v4.0-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v4.1-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-08-13 00:13 +08:00（日期選單改日曆並標示每日有無資料；修復我造成的 8/12 匯出檔截斷）
+> 最後更新：2026-08-13 10:28 +08:00（X 軸格線固定 30 分鐘，只標整點 + 結尾 21:30）
 
 ## 兩種跑法
 

@@ -456,6 +456,16 @@ function storeColor(name) { return STORE_COLORS[name] || '#8b4513'; }
 const API_BASE = 'https://dintaifung-queue.dannynycc.workers.dev';
 const ARCHIVE_BASE = 'data';
 
+// 抓取視窗（台北時間），必須與 worker/wrangler.toml 的 cron 一致：
+//   "* 1-12 * * *" + "0-30 13 * * *"（UTC）= 台北 09:00–21:30
+// 用「分鐘數」而非整點，因為結束時間 21:30 不是整點。
+//
+// 必須宣告在 `new Chart()` 之前：Chart 的建構子當下就會渲染一次，
+// 同步呼叫 x 軸的 ticks callback。若常數宣告在下方，那一次呼叫會撞上
+// 暫時性死區而拋 "Cannot access ... before initialization"，整個 chart 建不起來。
+const FETCH_WINDOW_START_MIN = 9 * 60;         // 09:00
+const FETCH_WINDOW_END_MIN = 21 * 60 + 30;     // 21:30
+
 // ── 狀態 ─────────────────────────────────────────
 let allRows = [];
 let knownStores = [];
@@ -593,12 +603,29 @@ const chart = new Chart(ctx, {
         title: { display: true, text: '時間', color: '#999' },
         ticks: {
           color: '#999',
-          maxTicksLimit: 12,
-          autoSkip: true,
-          callback: function(value) {
+          // 格線固定每 30 分鐘一條。注意 stepSize 要放在 ticks 底下 ——
+          // Chart.js v3 之後時間軸的 stepSize 從 time 移到了 ticks，
+          // 放錯位置不會報錯，只會被安靜忽略、由 Chart.js 自行決定間距
+          // （實測會變成 20 分鐘，且隨畫面寬度浮動）。
+          stepSize: 30,
+          // autoSkip 會把「刻度」整個拿掉，連格線一起消失。要保留 30 分鐘格線
+          // 但只標整點，就得關掉 autoSkip，改在 callback 回傳空字串來隱藏文字。
+          autoSkip: false,
+          maxTicksLimit: 100,
+          maxRotation: 0,
+          // 只標整點，其餘刻度回傳空字串（格線保留、文字不顯示）。
+          // 刻意不依畫面寬度調整標籤密度：窄畫面時 Chart.js 本來就會把刻度
+          // 間距加粗（350px 放 26 條線等於每 13px 一條，反而看不清楚），
+          // 落在整點上的刻度自然變少，密度會自己收斂。
+          callback: function (value) {
             const d = new Date(value);
-            return String(d.getHours()).padStart(2,'0') + ':' +
-                   String(d.getMinutes()).padStart(2,'0');
+            const h = d.getHours(), m = d.getMinutes();
+            if (m === 0) return String(h).padStart(2, '0') + ':00';
+            // 抓取視窗的結尾 21:30 不是整點，但要標出來
+            if (h * 60 + m === FETCH_WINDOW_END_MIN) {
+              return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+            }
+            return '';
           }
         },
         grid: { color: 'rgba(0,0,0,.05)' },
@@ -1020,6 +1047,22 @@ function minToClock(m) {
 //      這樣每天的圖橫向尺度一致、可以直接比較。
 //      但真實資料若超出這個範圍（例如本機 24 小時收集的歷史日），以資料為準 ——
 //      為了「好看」把真的存在的紀錄裁掉，就是拿呈現去騙資料。
+// 把時間戳對齊到 30 分鐘邊界。格線是每 30 分鐘一條，軸的兩端若停在
+// 23:30:33 這種零頭上，最後一格會被切掉一半，看起來像格線間距不一致。
+function snapHalfHour(ts, dir) {
+  const date = ts.slice(0, 10);
+  let h = Number(ts.slice(11, 13));
+  let m = Number(ts.slice(14, 16));
+  const s = Number(ts.slice(17, 19));
+  if (dir < 0) {
+    m = m < 30 ? 0 : 30;                       // 向下取整
+  } else if (m % 30 !== 0 || s > 0) {
+    if (m < 30) m = 30; else { m = 0; h += 1; } // 向上取整
+  }
+  if (h > 23) return `${date} 23:59:59`;
+  return `${date} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+}
+
 function applyAxisRange() {
   let min = `${selectedDate} ${minToClock(FETCH_WINDOW_START_MIN)}`;
   let max = `${selectedDate} ${minToClock(FETCH_WINDOW_END_MIN)}`;
@@ -1027,8 +1070,8 @@ function applyAxisRange() {
     if (r.timestamp < min) min = r.timestamp;
     if (r.timestamp > max) max = r.timestamp;
   }
-  chart.options.scales.x.min = min;
-  chart.options.scales.x.max = max;
+  chart.options.scales.x.min = snapHalfHour(min, -1);
+  chart.options.scales.x.max = snapHalfHour(max, +1);
 }
 
 function renderChart() {
@@ -1113,12 +1156,6 @@ function renderTable() {
 // 「上次更新」要顯示**資料的**時間，不是瀏覽器的時鐘。
 // 抓取只跑台北 09:00-21:30，非抓取時段看板顯示的是當天最後一筆；
 // 若寫成當下時間，等於宣稱資料是剛抓的 —— 那是謊報。
-// 抓取視窗（台北時間），必須與 worker/wrangler.toml 的 cron 一致：
-//   "* 1-12 * * *" + "0-30 13 * * *"（UTC）= 台北 09:00–21:30
-// 用「分鐘數」而非整點，因為結束時間是 21:30 不是整點。
-const FETCH_WINDOW_START_MIN = 9 * 60;         // 09:00
-const FETCH_WINDOW_END_MIN = 21 * 60 + 30;     // 21:30
-
 function renderFreshness(latestList) {
   const el = document.getElementById('lastUpdate');
   if (!latestList.length) { el.textContent = '無資料'; return; }

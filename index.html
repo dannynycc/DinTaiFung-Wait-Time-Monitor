@@ -477,12 +477,18 @@ const chart = new Chart(ctx, {
         title: { display: true, text: '時間', color: '#999' },
         ticks: {
           color: '#999',
-          maxTicksLimit: 12,
-          autoSkip: true,
+          // 格線每 30 分鐘一條、只標整點。
+          // stepSize 必須放在 ticks 底下 —— Chart.js v3 之後時間軸的 stepSize
+          // 從 time 移到了 ticks，放錯位置不會報錯，只會被安靜忽略。
+          // autoSkip 會連格線一起拿掉，所以關掉它、改用 callback 回傳空字串隱藏文字。
+          stepSize: 30,
+          autoSkip: false,
+          maxTicksLimit: 100,
+          maxRotation: 0,
           callback: function(value) {
             const d = new Date(value);
-            return String(d.getHours()).padStart(2,'0') + ':' +
-                   String(d.getMinutes()).padStart(2,'0');
+            if (d.getMinutes() !== 0) return '';
+            return String(d.getHours()).padStart(2,'0') + ':00';
           }
         },
         grid: { color: 'rgba(0,0,0,.05)' },
