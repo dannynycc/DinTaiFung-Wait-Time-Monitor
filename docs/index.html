@@ -181,10 +181,12 @@
   /* 「止號 尚未設定」原本是 #ccc，對比僅 1.61 —— 幾乎看不見。
      這是 README 稱為「熱度硬指標」的資訊，不該被淡到讀不到。 */
   .store-card .stop-time.unset { color: #7d7367; font-style: italic; }
-  .store-card.hot    { border-left: 4px solid #d32f2f; }
-  .store-card.warm   { border-left: 4px solid #f57c00; }
-  .store-card.cool   { border-left: 4px solid #388e3c; }
-  .store-card.idle   { border-left: 4px solid #bbb; }
+  /* 左側色帶＝這家分店在圖表裡的線條顏色（由 JS 依 STORE_COLORS 寫入）。
+     原本是用紅／橘／綠表示等候時間長短，但圖表的顏色代表「哪一家分店」——
+     同一個畫面裡同一個顏色有兩種意思（卡片的紅＝等很久、圖表的紅＝南西店），
+     兩套語法互相打架。改成分店色之後，卡片與線條直接對得起來。
+     等候時間長短由中央那個大數字本身表達，不需要再編碼一次。 */
+  .store-card { border-left: 4px solid transparent; }
   .store-card.selected { outline: 3px solid #8b4513; outline-offset: -3px; }
 
   /* 圖表 */
@@ -512,9 +514,20 @@
 const STORE_COLORS = {
   '信義店': '#e53935', '復興店': '#8e24aa', '天母店': '#1e88e5',
   '新竹店': '#43a047', '101店':  '#f4511e', '台中店': '#00897b',
-  '板橋店': '#fdd835', '高雄店': '#6d4c41', '南西店': '#d81b60',
-  'A4店':   '#3949ab', 'A13店':  '#00acc1', '新生店': '#7cb342',
+  // 板橋店原為 #fdd835（亮黃），對白底只有 1.4 對比 —— 當圖表線條就已經最難看清，
+  // 改成卡片左側色帶後更是幾乎看不見。改用 darkgoldenrod：對比 3.25，過 WCAG
+  // 對非文字圖形元件的 3:1 門檻，且與其他分店色的最小 Lab 色差 ΔE 48.7（無撞色風險）。
+  '板橋店': '#b8860b', '高雄店': '#6d4c41', '南西店': '#d81b60',
+  // 新生店原為 #7cb342（淺綠），與新竹店 #43a047 的 Lab 色差只有 ΔE 18 ——
+  // 兩家店名又相近（新竹／新生），是整個色盤最容易認錯的一對。改為藍灰色相
+  // （色盤中未被使用）後拉開到 ΔE 24.5。
+  'A4店':   '#3949ab', 'A13店':  '#00acc1', '新生店': '#546e7a',
 };
+// 已知限制：11 種類別色無法同時滿足色覺缺陷者 —— 色盲安全的類別色盤上限約 8 色
+// （業界標準 Okabe-Ito 即為 8 色）。實測綠色盲下 復興店↔A4店 色差僅 0.7，
+// 但把 A4 換色只會讓瓶頸移到 台中店↔新生店（2.1），兩者都低於人眼可辨閾值 2.3，
+// 屬於無效變更，因此不做。這類使用者改靠非顏色通道辨識：hover 卡片會加粗對應
+// 線條、tooltip 標示店名、點選後只顯示單一分店。
 function storeColor(name) { return STORE_COLORS[name] || '#8b4513'; }
 
 // ── 設定 ─────────────────────────────────────────
@@ -761,14 +774,6 @@ function waitLabel(wt) {
   return wt;   // 例如「已停止內用取號」，原樣顯示，不加單位
 }
 
-function heatClass(wt) {
-  const n = waitNumber(wt);
-  if (n === null) return 'idle';
-  if (n >= 40) return 'hot';
-  if (n >= 15) return 'warm';
-  return 'cool';
-}
-
 // ── 篩選控制 ─────────────────────────────────────
 function setFilter(storeName) {
   selectedStore = storeName;
@@ -898,7 +903,8 @@ function renderCards(latestList) {
     const r = byName.get(name);
     if (!r) {
       const card = document.createElement('div');
-      card.className = 'store-card idle';
+      card.className = 'store-card';
+      card.style.borderLeftColor = storeColor(name);
       setupCard(card, name);
       card.appendChild(createEl('div', name, 'name'));
       const wrap = createEl('div', null, 'closed');
@@ -913,7 +919,8 @@ function renderCards(latestList) {
     const isClosed = wn === null;   // '-1' 與「已停止內用取號」都算
 
     const card = document.createElement('div');
-    card.className = 'store-card ' + heatClass(wt);
+    card.className = 'store-card';
+    card.style.borderLeftColor = storeColor(name);
     if (selectedStore !== '__all__' && selectedStore === name) {
       card.classList.add('selected');
     }

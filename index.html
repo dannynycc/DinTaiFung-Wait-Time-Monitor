@@ -64,10 +64,9 @@
   .store-card .stop-time.hot { color: #d32f2f; font-weight: 600; }
   .store-card .stop-time.warm { color: #f57c00; }
   .store-card .stop-time.unset { color: #ccc; font-style: italic; }
-  .store-card.hot    { border-left: 4px solid #d32f2f; }
-  .store-card.warm   { border-left: 4px solid #f57c00; }
-  .store-card.cool   { border-left: 4px solid #388e3c; }
-  .store-card.idle   { border-left: 4px solid #bbb; }
+  /* 左側色帶＝這家分店在圖表裡的線條顏色（由 JS 依 STORE_COLORS 寫入）。
+     原本用紅／橘／綠表示等候時間長短，與圖表「顏色代表哪家分店」互相衝突。 */
+  .store-card { border-left: 4px solid transparent; }
   .store-card.selected { outline: 3px solid #8b4513; outline-offset: -3px; }
 
   /* 圖表 */
@@ -353,8 +352,10 @@
 const STORE_COLORS = {
   '信義店': '#e53935', '復興店': '#8e24aa', '天母店': '#1e88e5',
   '新竹店': '#43a047', '101店':  '#f4511e', '台中店': '#00897b',
-  '板橋店': '#fdd835', '高雄店': '#6d4c41', '南西店': '#d81b60',
-  'A4店':   '#3949ab', 'A13店':  '#00acc1', '新生店': '#7cb342',
+  // 板橋店原 #fdd835 對白底僅 1.4 對比、新生店原 #7cb342 與新竹店色差僅 ΔE 18，
+  // 兩者當色帶都不堪用。詳見 docs/index.html 的說明。
+  '板橋店': '#b8860b', '高雄店': '#6d4c41', '南西店': '#d81b60',
+  'A4店':   '#3949ab', 'A13店':  '#00acc1', '新生店': '#546e7a',
 };
 function storeColor(name) { return STORE_COLORS[name] || '#8b4513'; }
 
@@ -552,14 +553,6 @@ function waitLabel(wt) {
   return wt;   // 例如「已停止內用取號」，原樣顯示不加單位
 }
 
-function heatClass(wt) {
-  const n = waitNumber(wt);
-  if (n === null) return 'idle';
-  if (n >= 40) return 'hot';
-  if (n >= 15) return 'warm';
-  return 'cool';
-}
-
 // ── 篩選控制 ─────────────────────────────────────
 function setFilter(storeName) {
   selectedStore = storeName;
@@ -657,7 +650,8 @@ function renderCards(latestList) {
     const isClosed = wn === null;   // '-1' 與「已停止內用取號」都算
 
     const card = document.createElement('div');
-    card.className = 'store-card ' + heatClass(wt);
+    card.className = 'store-card';
+    card.style.borderLeftColor = storeColor(name);
     if (selectedStore !== '__all__' && selectedStore === name) {
       card.classList.add('selected');
     }
