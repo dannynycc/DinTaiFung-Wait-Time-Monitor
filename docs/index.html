@@ -105,7 +105,18 @@
     color: #5a3a1a; background: #f2e7d6; cursor: pointer; font-weight: 600;
   }
   .cal-day.has:hover { background: #e6d5bb; }
-  .cal-day.today { border-color: #b08860; }
+  /* 今日一定會有資料（cron 從每天 09:00 開始跑），所以不套用「有資料／無資料」
+     那組配色 —— 用它自己的綠色，在一片米色與灰色裡一眼就找得到。
+     此規則放在 .has／.none 之後、.sel 之前：今日的綠會蓋掉米／灰，
+     但若今日正好是選定日期，仍由 .sel 的實心棕勝出（選取是更強的狀態）。 */
+  .cal-day.today {
+    background: #e4f0e0;
+    color: #2e6b28;
+    border-color: #8bbd82;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .cal-day.today:hover { background: #d5e8d0; }
   .cal-day.sel { background: #8b4513; color: #fff; }
   .cal-day.sel:hover { background: #7a3d11; }
   .cal-day.empty { visibility: hidden; }
@@ -128,7 +139,7 @@
   .cal-key i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
   .cal-key .k-has { background: #f2e7d6; }
   .cal-key .k-none { background: #f6f4f0; border: 1px solid #eee; }
-  .cal-key .k-today { border: 1px solid #b08860; }
+  .cal-key .k-today { background: #e4f0e0; border: 1px solid #8bbd82; }
 
   /* 即時總覽卡片 */
   .overview {
