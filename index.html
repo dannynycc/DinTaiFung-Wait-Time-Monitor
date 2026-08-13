@@ -17,7 +17,10 @@
 
   header { text-align: center; margin-bottom: 24px; }
   header h1 { font-size: 24px; color: #8b4513; letter-spacing: 2px; }
-  header .sub { font-size: 12px; color: #999; margin-top: 4px; }
+  header .update-note {
+    font-size: 12px; color: #6f6558;
+    padding-left: 10px; border-left: 1px solid #d9cdbb;
+  }
   header .date-picker {
     display: inline-flex; align-items: center; gap: 8px;
     margin-top: 10px; font-size: 13px; color: #5a3a1a;
@@ -88,7 +91,37 @@
     gap: 10px;
     margin-bottom: 12px;
   }
-  .chart-header h2 { font-size: 15px; color: #8b4513; }
+  .chart-header h2 { font-size: 15px; color: #8b4513; white-space: nowrap; }
+
+  /* 圖表圖例（原本由 Chart.js 畫在 canvas 底部，會吃掉繪圖區的高度）。
+     搬到標題這一排之後，那些高度全部還給繪圖區。
+     flex: 1 讓它吃掉標題與篩選器之間的空間，窄畫面再自行換行。 */
+  .chart-legend {
+    flex: 1 1 auto;
+    display: flex; flex-wrap: wrap;
+    align-items: center; justify-content: center;
+    gap: 4px 12px;
+  }
+  .chart-legend .lg-item {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: inherit; font-size: 12px; color: #5a3a1a;
+    background: none; border: 0; padding: 3px 2px;
+    cursor: pointer; line-height: 1.2;
+    /* 觸控目標高度：WCAG 2.2 AA 要求 24px */
+    min-height: 24px;
+  }
+  .chart-legend .lg-item i {
+    width: 11px; height: 11px; border-radius: 2px;
+    border: 1.5px solid currentColor; background: transparent;
+    flex: none;
+  }
+  .chart-legend .lg-item:hover { color: #8b4513; }
+  .chart-legend .lg-item:focus-visible {
+    outline: 2px solid #8b4513; outline-offset: 1px; border-radius: 3px;
+  }
+  /* 被選為單一檢視的那一項 */
+  .chart-legend .lg-item[aria-pressed="true"] { font-weight: 700; color: #8b4513; }
+
   .chart-filter {
     display: flex; align-items: center; gap: 8px;
   }
@@ -282,10 +315,10 @@
 
 <header>
   <h1>鼎泰豐全分店 — 候位監控</h1>
-  <div class="sub">資料每 60 秒更新（圖表為步階線，只在等候變化時跳）| 點卡片可篩選</div>
   <div class="date-picker">
     <label>日期：</label>
     <select id="dateFilter"></select>
+    <span class="update-note">資料每 60 秒更新</span>
   </div>
 </header>
 
@@ -294,6 +327,7 @@
 <div class="chart-wrap">
   <div class="chart-header">
     <h2>各分店等候時間趨勢</h2>
+    <div class="chart-legend" id="chartLegend"></div>
     <div class="chart-filter">
       <label>篩選分店:</label>
       <select id="chartFilter">
@@ -366,7 +400,8 @@ function storeColor(name) { return STORE_COLORS[name] || '#8b4513'; }
 // ── 狀態 ─────────────────────────────────────────
 let allRows = [];
 let knownStores = [];
-let selectedStore = '__all__';  // 圖表+表格+卡片 共用篩選
+let selectedStore = '__all__';
+let chartStoresAll = [];        // 當天有資料的全部分店（不受篩選影響，圖例用）  // 圖表+表格+卡片 共用篩選
 let selectedDate = todayStr();  // YYYY-MM-DD
 
 function todayStr() {
@@ -439,18 +474,7 @@ const highlightPlugin = {
     );
     let activeIdx = elements.length > 0 ? elements[0].datasetIndex : -1;
 
-    // 偵測 legend hover
-    const leg = chart.legend;
-    if (leg && leg.legendHitBoxes) {
-      for (let i = 0; i < leg.legendHitBoxes.length; i++) {
-        const hb = leg.legendHitBoxes[i];
-        if (evt.x >= hb.left && evt.x <= hb.left + hb.width &&
-            evt.y >= hb.top  && evt.y <= hb.top + hb.height) {
-          activeIdx = i;
-          break;
-        }
-      }
-    }
+    // 圖例已改成 canvas 外的 HTML（見 renderLegend），hover 由 DOM 事件處理。
 
     scheduleHighlight(chart, activeIdx);
   }
@@ -714,19 +738,9 @@ const chart = new Chart(ctx, {
       }
     },
     plugins: {
-      legend: {
-        position: 'bottom',
-        labels: { boxWidth: 12, padding: 14, font: { size: 12 } },
-        // 點擊 legend = 單選那間店（再點一次 = 全部）
-        onClick(evt, item, legend) {
-          const name = item.text;
-          if (selectedStore === name) {
-            setFilter('__all__');
-          } else {
-            setFilter(name);
-          }
-        }
-      },
+      // Chart.js 內建的圖例畫在 canvas 裡，會吃掉繪圖區的高度。
+      // 改成畫在圖表標題那一排的 HTML 圖例（見 renderLegend）。
+      legend: { display: false },
       tooltip: {
         backgroundColor: 'rgba(60,30,10,0.9)',
         titleFont: { size: 12 }, bodyFont: { size: 13 },
@@ -986,8 +1000,11 @@ function buildChartDatasets(changes, dateStr) {
     String(tail.getMinutes()).padStart(2,'0') + ':' +
     String(tail.getSeconds()).padStart(2,'0');
 
+  // 圖例要一直列出所有分店，否則篩成單店之後就沒辦法直接切換到另一家
+  chartStoresAll = Object.keys(byStore);
+
   const showStores = selectedStore === '__all__'
-    ? Object.keys(byStore)
+    ? chartStoresAll.slice()
     : (byStore[selectedStore] ? [selectedStore] : []);
 
   const datasets = [];
@@ -1032,6 +1049,47 @@ function applyAxisRange() {
   chart.options.scales.x.max = max ?? undefined;
 }
 
+// ── 圖表圖例（HTML，畫在標題那一排）─────────────────
+// 原本用 Chart.js 內建的圖例，它畫在 canvas 底部、吃掉繪圖區的高度。
+// 搬成 HTML 之後那些高度全部還給繪圖區，y 軸的分鐘間距因此拉開。
+//
+// 搬出 canvas 也代表 hover 高亮不能再靠 legendHitBoxes 比對座標，
+// 改由 DOM 事件驅動 —— 行為要跟原本一致：移過去高亮該條線，點下去單獨檢視。
+function datasetIndexOf(name) {
+  return chart.data.datasets.findIndex(d => d.label === name);
+}
+
+function renderLegend() {
+  const box = document.getElementById('chartLegend');
+  if (!box) return;
+  const frag = document.createDocumentFragment();
+  for (const name of chartStoresAll) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'lg-item';
+    btn.setAttribute('aria-pressed', String(selectedStore === name));
+    btn.setAttribute('aria-label',
+      selectedStore === name ? `${name}（目前單獨檢視，按下顯示全部分店）` : `只看 ${name}`);
+    const sw = document.createElement('i');
+    // 色塊用 currentColor 畫外框，所以顏色設在元素本身
+    sw.style.color = storeColor(name);
+    btn.appendChild(sw);
+    btn.appendChild(document.createTextNode(name));
+
+    const on  = () => scheduleHighlight(chart, datasetIndexOf(name));
+    const off = () => scheduleHighlight(chart, -1);
+    btn.addEventListener('mouseenter', on);
+    btn.addEventListener('mouseleave', off);
+    btn.addEventListener('focus', on);
+    btn.addEventListener('blur', off);
+    btn.addEventListener('click', () => {
+      setFilter(selectedStore === name ? '__all__' : name);
+    });
+    frag.appendChild(btn);
+  }
+  box.replaceChildren(frag);
+}
+
 function renderChart() {
   // 取消還沒執行的 hover 重繪：它帶的是改版前的 dataset 索引，
   // 點卡片時 mouseenter 與 click 同時發生，等 rAF 執行時舊索引已不存在，
@@ -1044,6 +1102,7 @@ function renderChart() {
   chart.update('none');
   // update() 會重新解析元素樣式，等於沖掉 hover 高亮 —— 歸零讓下次滑動重新套用
   lastHoveredIdx = -1;
+  renderLegend();
 }
 
 // ── 渲染：表格（transition log）─────────────────
