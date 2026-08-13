@@ -396,12 +396,14 @@ let pendingHoverIdx = -1;
 let hoverRafId = 0;
 
 function paintHighlight(chart, activeIdx) {
+  const singleStore = chart.data.datasets.length === 1;
   chart.data.datasets.forEach((ds, i) => {
     const meta = chart.getDatasetMeta(i);
     const base = storeColor(ds.label);
     const isActive = i === activeIdx;
     const width = activeIdx === -1 ? 2 : (isActive ? 4.5 : 1);
-    const radius = activeIdx === -1 ? 2.5 : (isActive ? 4.5 : 1.5);
+    // hover 只改線的粗細與顏色，不動圓點；圓點只在單店檢視時顯示
+    const radius = singleStore ? 3 : 0;
     const color = (activeIdx !== -1 && !isActive) ? base + '40' : base;
     if (meta.dataset) {
       meta.dataset.options.borderWidth = width;
@@ -792,16 +794,20 @@ function buildChartDatasets(changes, dateStr) {
       pts.push({ x: end, y: pts[pts.length - 1].y });
     }
     const color = storeColor(name);
+    const single = showStores.length === 1;
     datasets.push({
       label: name,
       data: pts,
       borderColor: color,
       backgroundColor: color + '20',
       borderWidth: 2,
-      pointRadius: 3,
+      // 多分店時不畫圓點：整天 600+ 個變化事件會蓋掉線條、看不出趨勢。
+      // 步階線的轉折本身已標示變化時刻，圓點是重複資訊。單店時才畫。
+      pointRadius: single ? 3 : 0,
+      pointHoverRadius: single ? 5 : 4,
       pointBackgroundColor: color,
       stepped: 'before',  // 步階線：橫線維持到下個變化點才跳
-      fill: showStores.length === 1,
+      fill: single,
     });
   }
   return datasets;

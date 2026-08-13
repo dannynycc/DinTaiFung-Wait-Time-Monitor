@@ -527,7 +527,11 @@ function paintHighlight(chart, activeIdx) {
     const base = storeColor(ds.label);
     const isActive = i === activeIdx;
     const width = activeIdx === -1 ? 2 : (isActive ? 4.5 : 1);
-    const radius = hoverPointRadius(isActive, activeIdx, singleStore);
+    // hover 只改線的粗細與顏色，不動圓點。
+    // 圓點是否顯示只取決於「是不是單店檢視」：多店時一律不畫（整天 600+ 個
+    // 變化事件會蓋掉線條），單店時一律畫。被指到的線加了圓點反而更雜，
+    // 加粗本身已經足夠辨識。
+    const radius = singleStore ? 3 : 0;
     const color = (activeIdx !== -1 && !isActive) ? base + '40' : base;
     if (meta.dataset) {
       meta.dataset.options.borderWidth = width;
@@ -1031,13 +1035,6 @@ function buildChartDatasets(changes, dateStr) {
   return datasets;
 }
 
-// hover 高亮時，被指到的那條線把點顯示出來，其餘維持不畫。
-// 沒有這個的話，多分店檢視下高亮只能靠線條粗細與顏色深淺區分，
-// 線一多就不夠明顯。
-function hoverPointRadius(isActive, activeIdx, singleStore) {
-  if (activeIdx === -1) return singleStore ? 3 : 0;   // 無 hover：回到預設
-  return isActive ? 4 : 0;
-}
 
 // 由分鐘數產生 'HH:MM:SS'，讓軸範圍與抓取視窗共用同一組常數，不會各改各的
 function minToClock(m) {
