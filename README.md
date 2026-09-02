@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v4.15.1-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v4.16-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-09-02 13:05 +08:00（修掉三條全表掃描的查詢，D1 每日讀取量降 99.9%；匯出失敗改開 Issue 通知）
+> 最後更新：2026-09-02 13:39 +08:00（全 repo 審視：歷史日卡片不再顯示今日數字、本機 server 只綁 127.0.0.1、CDN 鎖版本加 SRI）
 
 ## 兩種跑法
 
@@ -18,6 +18,12 @@
 | 抓取時段 | 24 小時 | 台北 09:00–21:30 |
 
 兩者互不干擾，可並存。本文件先講雲端版，本機版說明在後半。
+
+> **本機版目前處於停用狀態**（`wait_log.db` 最後寫入時間是 2026-05-18，之後由雲端版接手）。
+> 它仍可執行，但前端功能落後 `docs/` 版：沒有日曆式日期選擇、沒有明確的連線錯誤狀態、
+> 沒有「抓取失敗就不延伸線條」的保護（該店會被畫成一條自信的水平線），
+> 時間也走瀏覽器當地時區而非固定台北。核心的資料正確性修正（非數值狀態處理、
+> 上游毛刺偵測）兩邊都有。要重新啟用本機版收集資料前，先確認這些落差可以接受。
 
 ## 雲端架構
 
@@ -69,8 +75,8 @@ npx wrangler tail                                                # 看即時 log
   - `wait_changes` — 只記錄 `wait_time` 變化事件（壓縮 ~16x，給 trend 用）
 
 ### Web 前端
-- **日期下拉選單**：可切換看任何歷史日，跨午夜後自動出現新「今日」
-- **即時狀態卡片**：每店一張，含現場等候 + 各桌型叫號 + **預計停止取號時間**（依時間早晚著色）
+- **日曆式日期選擇**：可切換看任何歷史日，跨午夜後自動出現新「今日」；沒有資料的日期是灰的且點不下去（不只靠顏色區分）
+- **狀態卡片**：每店一張。今日顯示即時值 + 各桌型叫號 + **預計停止取號時間**（依時間早晚著色）；歷史日改顯示**那天最後的狀態**並標出時刻（不會拿現在的數字充當歷史值）
 - **步階圖**：每店一條 stepped line，忠實表達「值維持到下次變化」
 - **變化事件表格**：`時間 | 分店 | 5分→10分 | 前值持續 32 分鐘`，比每分鐘重複行有意義
 - **單店篩選**：點卡片、點 Legend、或下拉選單，圖表+表格同步切換
@@ -92,6 +98,22 @@ stop.bat    # 停止整個 process tree
 ```bash
 python app.py
 # 開 http://localhost:5678
+```
+
+### 只監聽本機
+
+`app.py` 綁 `127.0.0.1`，而且只回應 `/`、`/index.html` 與 `/api/*`，其餘路徑一律 404。
+
+原本綁的是 `0.0.0.0`，而未知路徑會落到 Python 內建的靜態檔服務（`directory=BASE_DIR`）——
+實測 `GET /wait_log.db` 回 200（39 MB 的完整候位資料庫）、`GET /app.py` 回 200、
+`GET /` 還會列出目錄。等於同一個區網裡的任何裝置都拿得到 `wait_log.db`、
+`server.log` 與 `worker/wrangler.toml`。前端本來就不需要任何本地靜態檔
+（Chart.js 走 CDN、favicon 是 data URI），所以白名單以外直接 404。
+
+真要用手機在區網看，明確指定再開：
+
+```bash
+DTF_HOST=0.0.0.0 python app.py     # 先確認你信任那個網路
 ```
 
 ### Watchdog 機制
@@ -171,7 +193,6 @@ pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
 | Endpoint | 說明 |
 |---|---|
 | `GET /api/health` | 最近 20 次 cron 抓取紀錄（成功／失敗店數、耗時、錯誤訊息）。用來判斷「某段時間沒資料」是店家沒開還是排程掛了。 |
-
 | `GET /api/summary?date=` | 每日彙總（roll-up 產物）：當日最長候位、各桌型首末叫號、原 raw 筆數 |
 | `GET /api/stops` | 止號時間事件流 |
 

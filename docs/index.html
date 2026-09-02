@@ -23,8 +23,21 @@
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+<!-- 版本釘死到修訂號，不用 @4 這種浮動標籤。
+     這頁的圖表重度依賴 Chart.js 的 plugin 內部 API（getDatasetMeta、meta.data 的
+     x/y、isDatasetVisible、dataset.options 直接寫入、beforeLayout 改 layout.padding），
+     那些不在公開 API 的相容性保證範圍內。用 @4 等於讓 CDN 在任何一個 minor 版
+     直接換掉線上網站的繪圖引擎，而這裡沒有任何建置或測試流程會擋下來 ——
+     壞掉的話是使用者先看到。
+     integrity 則是防 CDN 內容被改：雜湊對不上瀏覽器就拒絕執行，而不是照跑。
+     升級步驟：改版號 → 重算 sha384 → 本機開一次確認圖表、線尾標籤、hover 高亮都正常。
+       curl -sL <url> | openssl dgst -sha384 -binary | openssl base64 -A -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1"
+        integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
+        crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"
+        integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws"
+        crossorigin="anonymous"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -601,6 +614,7 @@ const FETCH_WINDOW_END_MIN = 21 * 60 + 30;     // 21:30
 
 // ── 狀態 ─────────────────────────────────────────
 let allRows = [];
+let allRowsDate = null;         // allRows 目前對應哪一天（避免切日期失敗時沿用舊資料）
 let knownStores = [];
 let allStores = [];             // /api/stores 的權威分店清單（抓取失敗時卡片仍要出現）
 let lastSeenByStore = {};       // 分店 → 最後一次成功抓取的時間戳（圖表延伸上限）
@@ -892,7 +906,8 @@ const endLabelsPlugin = {
     };
 
     // 字級：縮到整批都放得下為止。beforeLayout 已經照基準字級留好空間，
-    // 通常不會觸發；只有在 35% 上限擋住留白、或近似高度的標籤擠成一列時才會縮。
+    // 通常不會觸發；只有在 22% 上限擋住留白、或近似高度的標籤擠成一列時才會縮。
+    // （22% 是 beforeLayout 裡 chart.width * 0.22 那個上限，兩處要一致。）
     let size = narrow ? END_LABEL_SIZE_SM : END_LABEL_SIZE;
     while (size > END_LABEL_MIN_SZ && layout(size) > chart.width - 2) size -= 0.5;
     layout(size);   // 用最終字級重算一次，確保 it.x 與 ctx.font 一致
@@ -1129,12 +1144,37 @@ function setupCard(card, name) {
   card.addEventListener('blur', () => hoverStoreFromCard(null));
 }
 
-// ── 渲染：卡片（用 /api/latest 給每店「現在」的值）───
+// 歷史日的卡片要顯示「那天最後的狀態」，不能顯示現在的值。
+//
+// 原本不論看哪一天，卡片一律吃 /api/latest（＝此刻的即時值）。實測 2026-09-02
+// 切到 8/29：日期按鈕寫「2026-08-29（週六）」、表格是 8/29 的紀錄，
+// 但卡片是當下 13:17 的數字（復興店 20、天母店 35…），頁尾還寫「13:17 台北」。
+// 使用者沒有任何線索能看出那四個數字不屬於 8/29 —— 這跟圖表把停止取號的店
+// 一路延伸成水平線是同一種錯誤：畫面宣稱了一件資料不支持的事。
+//
+// 變化事件本身就夠推出當日最後狀態：rows 依時間升序，同一家店後面的覆蓋前面的。
+// 叫號與止號沒辦法還原（raw 過保留期就被 roll-up 掉了），所以歷史日不顯示那一列，
+// 而不是拿今天的值來湊。
+function lastStateFromChanges(rows) {
+  const byStore = new Map();
+  for (const r of rows) {
+    byStore.set(r.store_name, r);
+  }
+  return [...byStore.values()].map(r => ({
+    store_id: r.store_id,
+    store_name: r.store_name,
+    wait_time: r.wait_time,
+    timestamp: r.timestamp,
+    last_time: 0,        // 歷史日沒有止號資料，0 = 不顯示（見 fmtStopTime）
+  }));
+}
+
+// ── 渲染：卡片（今日用 /api/latest，歷史日用當日最後狀態）───
 // 以 allStores（來自 /api/stores 的權威清單）為基準逐店渲染，而不是只跑
 // latestList。原因：某店若連續抓取失敗超過查詢視窗，它會從 /api/latest 消失，
 // 卡片就無聲不見了 —— 使用者只會看到 10 張卡片而不會察覺少了一家。
 // 現在改成一律出現，抓不到就明確標示「資料中斷」。
-function renderCards(latestList) {
+function renderCards(latestList, isToday = true) {
   const overview = document.getElementById('overview');
   overview.replaceChildren();
 
@@ -1154,9 +1194,12 @@ function renderCards(latestList) {
       setupCard(card, name);
       card.appendChild(createEl('div', name, 'name'));
       const wrap = createEl('div', null, 'closed');
-      wrap.appendChild(createEl('span', '資料中斷', 'wait'));
+      // 歷史日「這家店那天沒有紀錄」與今日「現在抓不到」是兩件事，
+      // 文案要分開 —— 對著一張歷史日的卡片說「近期無成功抓取」是答非所問。
+      wrap.appendChild(createEl('span', isToday ? '資料中斷' : '無紀錄', 'wait'));
       card.appendChild(wrap);
-      card.appendChild(createEl('div', '近期無成功抓取', 'stop-time unset'));
+      card.appendChild(createEl('div',
+        isToday ? '近期無成功抓取' : '當日無變化紀錄', 'stop-time unset'));
       overview.appendChild(card);
       continue;
     }
@@ -1187,13 +1230,23 @@ function renderCards(latestList) {
     // 原本無值時會印「止號 尚未設定」，那是把資料模型的狀態直接攤給使用者看：
     // 「這個欄位上游還沒填」對想吃小籠包的人沒有任何用處，只是佔掉一行。
     // 有值時（例如「止號 21:00」）才有意義 —— 那是最晚要到店的時間。
-    const stopStr = fmtStopTime(r.last_time);
-    if (stopStr) {
-      const stopDiv = document.createElement('div');
-      stopDiv.className = 'stop-time ' + stopTimeHeat(r.last_time);
-      stopDiv.appendChild(createEl('span', '止號 ', 'label'));
-      stopDiv.appendChild(createEl('span', stopStr));
-      card.appendChild(stopDiv);
+    if (isToday) {
+      const stopStr = fmtStopTime(r.last_time);
+      if (stopStr) {
+        const stopDiv = document.createElement('div');
+        stopDiv.className = 'stop-time ' + stopTimeHeat(r.last_time);
+        stopDiv.appendChild(createEl('span', '止號 ', 'label'));
+        stopDiv.appendChild(createEl('span', stopStr));
+        card.appendChild(stopDiv);
+      }
+    } else {
+      // 歷史日：這個值是那天最後一次變化留下的，把時刻標出來。
+      // 沒有這一行，卡片上的數字看起來就像是「那天的代表值」，
+      // 但它其實是「當日收攤時的值」—— 兩者差很多（多數店收攤時是 0）。
+      const t = createEl('div', null, 'stop-time');
+      t.appendChild(createEl('span', '當日最後 ', 'label'));
+      t.appendChild(createEl('span', r.timestamp.slice(11, 16)));
+      card.appendChild(t);
     }
 
     overview.appendChild(card);
@@ -1553,10 +1606,19 @@ function renderTable() {
 // 「上次更新」要顯示**資料的**時間，不是瀏覽器的時鐘。
 // 抓取只跑台北 09:00-21:30，非抓取時段看板顯示的是當天最後一筆；
 // 若寫成當下時間，等於宣稱資料是剛抓的 —— 那是謊報。
-function renderFreshness(latestList) {
+function renderFreshness(latestList, isToday = true) {
   const el = document.getElementById('lastUpdate');
   if (!latestList.length) { el.textContent = '無資料'; return; }
   const ts = latestList.map(r => r.timestamp).sort().pop();
+
+  // 歷史日不談「幾分鐘前」。那個算法是拿「現在」減掉資料時間，
+  // 對三天前的紀錄只會得到「4320 分鐘前，資料可能中斷」這種既正確又無意義的話；
+  // 更糟的是原本它連歷史日都印今天的時鐘（看 8/29 卻寫「13:17 台北」）。
+  if (!isToday) {
+    el.textContent = `${selectedDate} 最後紀錄 ${ts.slice(11, 16)}`;
+    return;
+  }
+
   const ageMin = Math.floor(
     (taipeiNow().getTime() - Date.parse(ts.replace(' ', 'T') + 'Z')) / 60000
   );
@@ -1582,6 +1644,10 @@ function renderFreshness(latestList) {
 function render(changesRows, latestList) {
   allRows = changesRows;
   glitchSet = findGlitches(allRows);
+  const isToday = selectedDate === todayStr();
+  // 今日看即時值；歷史日一律用當日最後狀態推導，絕不把「現在」的數字
+  // 掛在別的日期底下（見 lastStateFromChanges 的說明）。
+  const cardList = isToday ? latestList : lastStateFromChanges(changesRows);
   // 下拉用 /api/stores 的權威清單；抓不到的店也要留在選單裡，否則使用者
   // 會以為那家店不存在，而不是「那家店現在抓不到」。
   const newStores = allStores.length ? allStores : latestList.map(r => r.store_name);
@@ -1589,18 +1655,26 @@ function render(changesRows, latestList) {
     knownStores = newStores;
     populateDropdowns(knownStores);
   }
-  // 記錄每店最後一次成功抓取的時間，給圖表當延伸上限
+  // 記錄每店最後一次成功抓取的時間，給圖表當延伸上限。
+  // 一律用 latestList（即時）：這個值只在 isToday 的分支被用到，
+  // 歷史日的線是延伸到當日終點，不吃這張表。
   lastSeenByStore = Object.fromEntries(latestList.map(r => [r.store_name, r.timestamp]));
 
-  renderCards(latestList);
+  renderCards(cardList, isToday);
   renderChart();
   renderTable();
-  renderFreshness(latestList);
+  renderFreshness(cardList, isToday);
 }
 
 // 明確的錯誤狀態。沒有這個的話，端點掛掉時畫面是「空的但看起來正常」——
 // 使用者會以為今天沒人排隊，而不是知道這裡出錯了。
-function renderError(msg) {
+// clearData：連圖表與表格一起清掉。
+// 只在「畫面上的資料不屬於目前選定的日期」時才需要 —— 切到 8/27 但載入失敗，
+// 留著今日的圖表和 210 列表格配上「2026-08-27」的標題，就是這次要修的那個
+// 謊報本身，只是換個地方發生。
+// 今日刷新失敗則相反：allRows 仍然是今天的，保留上一次成功的畫面才對，
+// 清掉只會讓使用者失去本來正確的資訊。
+function renderError(msg, clearData = false) {
   const overview = document.getElementById('overview');
   const box = createEl('div', null, 'store-card idle');
   box.style.gridColumn = '1 / -1';
@@ -1608,6 +1682,14 @@ function renderError(msg) {
   box.appendChild(createEl('div', msg, 'stop-time unset'));
   overview.replaceChildren(box);
   document.getElementById('lastUpdate').textContent = '連線失敗';
+
+  if (clearData) {
+    allRows = [];
+    allRowsDate = null;
+    glitchSet = new Set();
+    renderChart();
+    renderTable();
+  }
 }
 
 // ── 定時拉資料 ──────────────────────────────────
@@ -1667,11 +1749,22 @@ async function refresh(options = {}) {
     if (chRes.status === 'rejected') console.error('changes fetch failed:', chRes.reason);
     if (ltRes.status === 'rejected') console.error('latest fetch failed:', ltRes.reason);
 
+    // changes 失敗時原本一律沿用 allRows 繼續畫。在「今日」定時刷新的情境下
+    // 那是對的（維持上一次的畫面比整頁閃掉好），但切換日期時就不是 ——
+    // 日期按鈕已經變成 8/29 了，畫面上卻是前一個日期的圖表與表格，
+    // 而且沒有任何提示。要沿用舊資料，前提是舊資料本來就屬於這一天。
+    if (chRes.status === 'rejected' && allRowsDate !== requestDate) {
+      renderError(`無法載入 ${requestDate} 的資料：${chRes.reason?.message ?? chRes.reason}`,
+                  true);
+      return;
+    }
+
     if (selectedDate === requestDate) {
       render(
         chRes.status === 'fulfilled' ? chRes.value : allRows,
         ltRes.status === 'fulfilled' ? ltRes.value : [],
       );
+      allRowsDate = requestDate;
     }
   } catch (e) {
     if (e.name !== 'AbortError') console.error('fetch error:', e);

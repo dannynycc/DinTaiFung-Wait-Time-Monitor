@@ -25,6 +25,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "wait_log.db")
 OLD_CSV = os.path.join(BASE_DIR, "all_branches_log.csv")
 PORT = 5678
+# 只監聽本機。要讓區網其他裝置連（例如用手機看），啟動前設 DTF_HOST=0.0.0.0，
+# 但先確認你信任那個網路 —— 見 main() 裡的說明。
+HOST = os.environ.get("DTF_HOST", "127.0.0.1")
 
 # 信義店長期回傳「無提供內用」或 -1，無實際候位資料 → 永久排除
 EXCLUDED_STORE_IDS = {"0001"}
@@ -86,6 +89,25 @@ def ensure_db():
             CREATE INDEX IF NOT EXISTS idx_changes_store_ts ON wait_changes(store_id, timestamp);
         """)
 
+    # 唯一索引與 D1 那邊對齊（worker/migrations/002_review_fixes.sql）。
+    # README 一直寫「D1 schema 與本機 wait_log.db 完全同構」，但雲端加了這兩個
+    # 索引之後本機沒跟上，兩邊其實已經分岔 —— 現在補回來。
+    # 搭配下方 db_insert 的 INSERT OR IGNORE，同一分鐘的重複寫入被安靜忽略。
+    #
+    # 分開執行並容錯：既有 DB 若剛好有重複列，建索引會失敗。那時不該讓整個
+    # 程式起不來 —— 沒有唯一索引只是少一層保險，服務停掉才是真的問題。
+    # （本機 wait_log.db 實測 257,049 + 14,645 筆，重複組合 0，會直接建成功。）
+    with db_connect() as conn:
+        for name, table in (("ux_wait_log_ts_store", "wait_log"),
+                            ("ux_wait_changes_ts_store", "wait_changes")):
+            try:
+                conn.execute(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table}(timestamp, store_id)"
+                )
+            except sqlite3.IntegrityError:
+                print(f"  [警告] {table} 有重複的 (timestamp, store_id)，"
+                      f"略過唯一索引 {name}", flush=True)
+
 
 def backfill_changes_if_empty():
     """從既有 wait_log 推導變化事件，一次性 backfill"""
@@ -125,7 +147,7 @@ def backfill_changes_if_empty():
             last_change_ts[sid] = ts
 
         conn.executemany(
-            """INSERT INTO wait_changes
+            """INSERT OR IGNORE INTO wait_changes
                (timestamp, store_id, store_name, wait_time, prev_value, duration_min)
                VALUES (?, ?, ?, ?, ?, ?)""",
             records
@@ -150,7 +172,7 @@ def migrate_csv_if_needed():
                     r.get("togo_numbers", ""), int(r.get("last_time") or 0)
                 ))
         conn.executemany(
-            """INSERT INTO wait_log
+            """INSERT OR IGNORE INTO wait_log
                (timestamp, store_id, store_name, wait_time,
                 num_1, num_2, num_3, num_4, togo_numbers, last_time)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -170,7 +192,7 @@ def db_insert(ts, results):
     with db_connect() as conn:
         # 1) 寫 raw log
         conn.executemany(
-            """INSERT INTO wait_log
+            """INSERT OR IGNORE INTO wait_log
                (timestamp, store_id, store_name, wait_time,
                 num_1, num_2, num_3, num_4, togo_numbers, last_time)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -194,7 +216,7 @@ def db_insert(ts, results):
             if last is None:
                 # 此店第一筆變化（包含開站第一筆）
                 conn.execute(
-                    """INSERT INTO wait_changes
+                    """INSERT OR IGNORE INTO wait_changes
                        (timestamp, store_id, store_name, wait_time, prev_value, duration_min)
                        VALUES (?, ?, ?, ?, ?, ?)""",
                     (ts, sid, r["store_name"], new_val, None, None)
@@ -205,7 +227,7 @@ def db_insert(ts, results):
                 t2 = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
                 duration = int((t2 - t1).total_seconds() // 60)
                 conn.execute(
-                    """INSERT INTO wait_changes
+                    """INSERT OR IGNORE INTO wait_changes
                        (timestamp, store_id, store_name, wait_time, prev_value, duration_min)
                        VALUES (?, ?, ?, ?, ?, ?)""",
                     (ts, sid, r["store_name"], new_val, last["wait_time"], duration)
@@ -376,6 +398,14 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=BASE_DIR, **kwargs)
 
     def do_GET(self):
+        # 注意：這裡刻意「不」呼叫 super().do_GET() 當 fallback。
+        # 原本未知路徑會落到 SimpleHTTPRequestHandler 的靜態檔服務（directory=BASE_DIR），
+        # 等於把整個專案目錄開放出去 —— 實測 GET /wait_log.db 回 200（39 MB 的完整
+        # 候位資料庫）、GET /repro.py 回 200、GET / 還會列出目錄。搭配下方原本綁在
+        # 0.0.0.0 的監聽，同一個區網裡的任何裝置都拿得到 wait_log.db、server.log、
+        # worker/wrangler.toml。
+        # 前端不需要任何本地靜態檔（Chart.js 走 CDN、favicon 是 data URI），
+        # 所以最安全也最簡單的做法就是白名單以外一律 404。
         from urllib.parse import urlparse, parse_qs
         parsed = urlparse(self.path)
         if parsed.path == "/api/data":
@@ -396,7 +426,7 @@ class Handler(SimpleHTTPRequestHandler):
             with open(os.path.join(BASE_DIR, "index.html"), "rb") as f:
                 self._bytes_response(f.read(), "text/html; charset=utf-8")
         else:
-            super().do_GET()
+            self.send_error(404, "Not Found")
 
     def _json_response(self, obj):
         self._bytes_response(
@@ -446,7 +476,12 @@ def main():
     t = threading.Thread(target=monitor_loop, daemon=True)
     t.start()
 
-    server = LongRunningHTTPServer(("0.0.0.0", PORT), Handler)
+    # 綁 127.0.0.1 而不是 0.0.0.0。原本綁 0.0.0.0 等於把服務開放給整個區網，
+    # 但這個服務從來就只給本機看（watchdog 的健康檢查用的也是 127.0.0.1，
+    # README 寫的也是 http://localhost:5678）—— 對外監聽沒有帶來任何功能，
+    # 只帶來暴露面。真的需要用手機在區網看時，設 DTF_HOST=0.0.0.0 再開一次，
+    # 那是明確的選擇而不是預設值。
+    server = LongRunningHTTPServer((HOST, PORT), Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

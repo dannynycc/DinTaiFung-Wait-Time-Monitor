@@ -1,5 +1,10 @@
--- D1 schema，與本機 wait_log.db 完全同構（D1 底層就是 SQLite）
+-- D1 schema（D1 底層就是 SQLite）
 -- 建立：npx wrangler d1 execute dintaifung --remote --file=worker/schema.sql
+--
+-- 與本機 wait_log.db 的關係：wait_log 與 wait_changes 兩張表**同構**（欄位與索引
+-- 一致，本機版 2026-09-02 補上了原本只有雲端才有的兩個唯一索引）。
+-- 但整體 schema 並不相同 —— stop_changes / daily_summary / fetch_health 是
+-- 上雲之後才有的表，本機版沒有。舊註解寫「完全同構」是不準確的。
 
 CREATE TABLE IF NOT EXISTS wait_log (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,

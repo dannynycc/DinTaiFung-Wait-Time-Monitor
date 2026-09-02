@@ -31,6 +31,12 @@ CHECK_INTERVAL = 30
 WARMUP = 10
 FAIL_LIMIT = 3
 RESTART_BACKOFF = 5
+# 連續快速崩潰時的退避上限。5 分鐘足以讓人發現「它沒起來」，
+# 又不會久到真的可恢復的故障（例如暫時佔用的埠）要等太久。
+RESTART_BACKOFF_MAX = 300
+# 活過這個秒數就算「這次啟動是成功的」，退避歸零。
+# 取 WARMUP + 兩輪健康檢查：撐得過兩次 /api/stores 就不是啟動即崩。
+HEALTHY_UPTIME = WARMUP + CHECK_INTERVAL * 2
 
 # 即使是用 pythonw.exe 起 watchdog，啟動 app.py 也用 python.exe（讓 print 能 flush 到檔）
 PYTHON_EXE = sys.executable.replace("pythonw.exe", "python.exe")
@@ -45,7 +51,31 @@ def log(msg: str) -> None:
         pass
 
 
+# log 輪替門檻。三個 log 都是 append 模式、從來沒有人清 ——
+# 實測 server.log 已經長到 4.5 MB、server.err.log 2.9 MB
+# （.gitignore 原本註解說「每次跑都會重寫」，那是錯的）。
+# app.py 每 60 秒印一行 11 店摘要，約 100 KB/天，一年就是 36 MB。
+# 保留一份 .1 當上一輪的紀錄，再舊的就沒有查閱價值了。
+LOG_MAX_BYTES = 5 * 1024 * 1024
+
+
+def rotate_if_big(path: str) -> None:
+    try:
+        if os.path.exists(path) and os.path.getsize(path) >= LOG_MAX_BYTES:
+            prev = path + ".1"
+            if os.path.exists(prev):
+                os.remove(prev)
+            os.replace(path, prev)
+            log(f"rotated {os.path.basename(path)} -> {os.path.basename(prev)}")
+    except Exception as e:
+        # 輪替失敗不該拖垮 watchdog：log 太大只是不方便，app 停掉才是真的問題
+        log(f"rotate failed for {os.path.basename(path)}: {e}")
+
+
 def start_app() -> subprocess.Popen:
+    rotate_if_big(SERVER_OUT)
+    rotate_if_big(SERVER_ERR)
+    rotate_if_big(WATCHDOG_LOG)
     out_fh = open(SERVER_OUT, "ab")
     err_fh = open(SERVER_ERR, "ab")
     flags = 0
@@ -96,15 +126,31 @@ def main() -> None:
     proc = start_app()
     log(f"app started PID={proc.pid}")
     fails = 0
+    # 連續快速崩潰時要退避。原本不論死幾次都固定等 5 秒，
+    # 若 app.py 是「一啟動就死」（5678 埠被占用、DB 損毀、語法錯誤都會這樣），
+    # watchdog 會每 45 秒重啟一次、永遠不停，把 server.err.log 灌爆卻修不好任何事。
+    #
+    # 判斷「這次重啟有沒有用」的依據是**上一輪 app 活了多久**，
+    # 不是重啟流程本身花了多久 —— 後者永遠等於 backoff + WARMUP，拿它當條件
+    # 會讓退避永遠歸零、完全失效（這個版本第一次就是這樣寫錯的）。
+    backoff = RESTART_BACKOFF
+    app_started = time.time()
     time.sleep(WARMUP)
 
     while True:
         time.sleep(CHECK_INTERVAL)
 
         if proc.poll() is not None:
-            log(f"app DEAD (exit={proc.returncode}); restart in {RESTART_BACKOFF}s")
-            time.sleep(RESTART_BACKOFF)
+            lived = time.time() - app_started
+            # 活得比 HEALTHY_UPTIME 久 → 上次重啟是有效的，退避歸零重新算；
+            # 一啟動就死才加倍。
+            backoff = (RESTART_BACKOFF if lived >= HEALTHY_UPTIME
+                       else min(backoff * 2, RESTART_BACKOFF_MAX))
+            log(f"app DEAD (exit={proc.returncode}, lived {lived:.0f}s); "
+                f"restart in {backoff}s")
+            time.sleep(backoff)
             proc = start_app()
+            app_started = time.time()
             log(f"app restarted PID={proc.pid}")
             fails = 0
             time.sleep(WARMUP)
@@ -122,6 +168,7 @@ def main() -> None:
                 stop_proc(proc)
                 time.sleep(RESTART_BACKOFF)
                 proc = start_app()
+                app_started = time.time()
                 log(f"app restarted PID={proc.pid}")
                 fails = 0
                 time.sleep(WARMUP)

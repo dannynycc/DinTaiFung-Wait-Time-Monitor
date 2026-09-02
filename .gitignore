@@ -15,16 +15,27 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Server 執行期 log（每次跑都會重寫）
+# Server 執行期 log。
+# 註：這些是 append 模式，不是「每次跑都會重寫」（舊註解寫錯了）——
+# 實測 server.log 曾長到 4.5 MB。watchdog.py 現在會在啟動時輪替超過 5 MB 的檔案，
+# 舊的那份留成 .1。
 server.log
 server.err.log
 watchdog.log
+*.log.1
 
 # 舊 CSV 備份（已遷移至 SQLite）
 *.csv.migrated
 
-# 注意：wait_log.db 首次 push 當示例資料
-# 之後用 `git update-index --skip-worktree wait_log.db` 避免新資料被追蹤
+# 注意：wait_log.db 首次 push 當示例資料（HEAD 上是 188 KB 的小樣本），
+# 之後用 `git update-index --skip-worktree wait_log.db` 避免新資料被追蹤。
+#
+# ⚠️ skip-worktree 是**本機 index 的旗標，不會隨 clone 傳播**。
+#    在新機器上 clone 之後要自己再設一次：
+#        git update-index --skip-worktree wait_log.db
+#    沒設而本機版又跑過的話，工作目錄那份會長到數十 MB（目前 39 MB），
+#    一個 `git add -A` 就會把它推上 public repo。
+#    確認目前狀態：`git ls-files -v wait_log.db`，開頭是 S 才代表有生效。
 
 # Cloudflare Worker
 worker/node_modules/
