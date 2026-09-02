@@ -198,14 +198,15 @@ async function runCycle(env) {
   }
 
   // 2) 比對每店最後一筆變化事件，值不同才記一筆
-  //    一次查回全部分店的最後狀態（1 個 query），避免逐店查（11 個 query）。
-  //    D1 免費方案每次 Worker 呼叫上限 50 個 query，這樣整個週期只用掉 4 個。
-  const lastRows = await env.DB.prepare(`
-    SELECT store_id, wait_time, MAX(timestamp) AS timestamp
-    FROM wait_changes
-    GROUP BY store_id
-  `).all();
-  const lastByStore = new Map((lastRows.results ?? []).map((r) => [r.store_id, r]));
+  //    原本用一句 GROUP BY 查回全部分店，query 數少（整個週期只用掉 4 個）——
+  //    但那句每次都掃完整張 wait_changes，是 D1 額度被吃爆的主因，見 latestPerStore。
+  //    改成逐店索引查、分批送：query 數變成 3 個（11 店 ÷ 每批 5），
+  //    仍遠低於 D1 每次 Worker 呼叫的 50 個上限，而 rows_read 從 14,275 降到 11。
+  const lastRows = await latestPerStore(
+    env, 'wait_changes', ['store_id', 'wait_time', 'timestamp'],
+    results.map((r) => r.store_id)
+  );
+  const lastByStore = new Map(lastRows.map((r) => [r.store_id, r]));
 
   const changes = [];
   for (const r of results) {
@@ -281,6 +282,39 @@ function writeHealth(env, ts, ok, fail, elapsed, note) {
   return env.DB.prepare(
     'INSERT INTO fetch_health (timestamp, ok_count, fail_count, elapsed_ms, note) VALUES (?,?,?,?,?)'
   ).bind(ts, ok, fail, elapsed, note).run();
+}
+
+// ── 每店最新一筆 ──────────────────────────────────
+//
+// 2026-09-02：D1 免費方案的每日 rows_read（500 萬）被吃爆，Worker 開始回 500，
+// 每日匯出的 GitHub Actions 也跟著連續失敗。根因是「回傳幾列」與「讀了幾列」
+// 是兩回事 —— 原本取每店最新值的寫法是
+//     SELECT store_id, wait_time, MAX(timestamp) FROM wait_changes GROUP BY store_id
+// 只回 11 列，但 SQLite 沒有 index skip-scan，idx_changes_store_ts 幫不上忙，
+// 實際是掃完整張表再聚合。實測 rows_read = 14,275（= 全表），而 cron 每分鐘打一次：
+//     14,275 × 751 次/天 ≈ 1,072 萬 rows_read/天 = 免費額度的 2.1 倍
+// 成本與「表有多大」成正比而不是與「要幾列」成正比，所以上線時完全正常，
+// 兩週後資料長到臨界點才炸 —— 這類 bug 有潛伏期，實測 rows_read 才看得見。
+//
+// 改成逐店 `WHERE store_id = ? ORDER BY timestamp DESC LIMIT 1`：走索引，每店讀 1 列。
+// 分批是因為 D1 對 compound SELECT 的 term 數上限很低（實測 5 可、7 就回
+// SQLITE_ERROR 7500 "too many terms in compound SELECT"，遠低於標準 SQLite 的 500）。
+const COMPOUND_MAX = 5;
+
+async function latestPerStore(env, table, columns, storeIds) {
+  if (!storeIds.length) return [];
+  // table / columns 都是本檔案內的常數，沒有外部輸入，插值安全；store_id 走 bind。
+  const cols = columns.join(', ');
+  const stmts = [];
+  for (let i = 0; i < storeIds.length; i += COMPOUND_MAX) {
+    const chunk = storeIds.slice(i, i + COMPOUND_MAX);
+    const sql = chunk
+      .map(() => `SELECT ${cols} FROM (SELECT ${cols} FROM ${table} WHERE store_id = ? ORDER BY timestamp DESC LIMIT 1)`)
+      .join(' UNION ALL ');
+    stmts.push(env.DB.prepare(sql).bind(...chunk));
+  }
+  const res = await env.DB.batch(stmts);
+  return res.flatMap((r) => r.results ?? []);
 }
 
 /**
@@ -388,26 +422,32 @@ async function handleApi(url, env) {
   }
 
   if (path === '/api/latest') {
-    // SQLite 特性：使用 MAX() 聚合時，同一列的其他裸欄位保證取自 MAX 命中的那一列。
-    // 因此這一句就能取得每店最新快照，不需要相關子查詢。
-    //
-    // 視窗錨定在「資料最後一筆」而不是「現在」。
-    // 原本寫成「現在往前 6 小時」，但 cron 只跑台北 09:00-21:30，
-    // 每天午夜過後最後一筆資料就超過 6 小時 → 回空陣列 → 整頁卡片消失，
+    // 舊寫法是 `WHERE timestamp >= (SELECT datetime(MAX(timestamp),'-6 hours') ...)
+    // GROUP BY store_id`，只回 11 列卻掃完整張 wait_log（實測 rows_read 18,855），
+    // 而前端每 60 秒打一次 —— 一位訪客開著看板一小時就是 113 萬 rows_read。
+    // 改成逐店索引查最後一筆（見 latestPerStore），rows_read 降到 11。
+    const rows = await latestPerStore(
+      env, 'wait_log',
+      ['store_id', 'store_name', 'wait_time', 'num_1', 'num_2', 'num_3', 'num_4',
+       'togo_numbers', 'last_time', 'timestamp'],
+      STORES.map((s) => s.id)
+    );
+
+    // 6 小時的新鮮度視窗維持原語意，只是改在 JS 端過濾。
+    // 錨點是「資料最後一筆」而不是「現在」：cron 只跑台北 09:00-21:30，
+    // 若錨在現在，每天午夜過後最後一筆就超過 6 小時 → 回空陣列 → 整頁卡片消失，
     // 每天 00:00-09:06 共 9 小時都是空白。錨定在資料上就不受抓取視窗影響。
-    const { results } = await env.DB.prepare(`
-      SELECT store_id, store_name, wait_time, num_1, num_2, num_3, num_4,
-             togo_numbers, last_time, MAX(timestamp) AS timestamp
-      FROM wait_log
-      WHERE timestamp >= (SELECT datetime(MAX(timestamp), '-6 hours') FROM wait_log)
-      GROUP BY store_id
-    `).all();
+    const newest = rows.reduce((m, r) => (r.timestamp > m ? r.timestamp : m), '');
+    const cutoff = newest
+      ? new Date(Date.parse(newest.replace(' ', 'T') + 'Z') - 6 * 3600 * 1000)
+          .toISOString().slice(0, 19).replace('T', ' ')
+      : '';
     // 依官網門市順序回傳，而不是 store_id。前端雖然以 /api/stores 當權威清單，
     // 但 /api/stores 取不到時會退回用這裡的順序，兩邊一致才不會忽然變成 ID 序。
-    const rows = (results ?? []).slice().sort(
-      (a, b) => (STORE_ORDER.get(a.store_id) ?? 99) - (STORE_ORDER.get(b.store_id) ?? 99)
-    );
-    return json(rows);
+    const fresh = rows
+      .filter((r) => r.timestamp >= cutoff)
+      .sort((a, b) => (STORE_ORDER.get(a.store_id) ?? 99) - (STORE_ORDER.get(b.store_id) ?? 99));
+    return json(fresh);
   }
 
   if (path === '/api/changes') {
@@ -427,10 +467,30 @@ async function handleApi(url, env) {
   }
 
   if (path === '/api/dates') {
-    const { results } = await env.DB.prepare(`
-      SELECT DISTINCT substr(timestamp,1,10) AS d FROM wait_changes ORDER BY d DESC
-    `).all();
-    return json((results ?? []).map((r) => r.d));
+    // 舊寫法 `SELECT DISTINCT substr(timestamp,1,10) FROM wait_changes` 對 timestamp
+    // 做了函式運算，索引用不上，每次掃全表（實測 rows_read 28,554），
+    // 而前端每 10 分鐘就打一次。
+    //
+    // 改成兩段：已 roll-up 的日子直接讀 daily_summary（每天每店一列，量小），
+    // 尚未 roll-up 的近日用索引逐日探一筆就好。
+    //
+    // 探測範圍取 7 天而不是 RAW_RETENTION_DAYS+1（=3）：roll-up 若連續幾天沒跑成功，
+    // daily_summary 就會缺那幾天，剛好卡在兩段的接縫上而整個消失。
+    // 這次就是真的發生過 —— 8/31 起 Worker 因額度超限回 500，roll-up 連四天沒跑。
+    const PROBE_DAYS = 7;
+    const stmts = [env.DB.prepare('SELECT DISTINCT date AS d FROM daily_summary')];
+    for (let i = 0; i < PROBE_DAYS; i++) {
+      const d = daysAgoTaipei(i).slice(0, 10);
+      const next = new Date(Date.parse(`${d}T00:00:00Z`) + 86400000)
+        .toISOString().slice(0, 10);
+      stmts.push(env.DB.prepare(
+        'SELECT substr(timestamp,1,10) AS d FROM wait_changes WHERE timestamp >= ? AND timestamp < ? LIMIT 1'
+      ).bind(`${d} 00:00:00`, `${next} 00:00:00`));
+    }
+    const res = await env.DB.batch(stmts);
+    const days = new Set();
+    for (const r of res) for (const row of (r.results ?? [])) days.add(row.d);
+    return json([...days].sort().reverse());
   }
 
   if (path === '/api/summary') {

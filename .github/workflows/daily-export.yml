@@ -181,5 +181,15 @@ jobs:
             echo "沒有變更，不建立 commit"
           else
             git commit -m "data: ${{ steps.pick.outputs.date }} 候位變化事件（${{ steps.fetch.outputs.count }} 筆）"
+            # push 可能撞到另一個同時在跑的 run —— 補匯出多天歷史時特別容易發生，
+            # 2026-09-02 補 8/26 與 8/29 就踩到（第二個被 non-fast-forward 打回，
+            # 資料明明抓對了卻整個 run 失敗）。各 run 寫的是不同的 docs/data/*.json，
+            # 內容本來就不衝突，rebase 後重試即可。
+            # 最後一次不包在 if 裡：真的推不上去要讓 step 失敗，不能靜默吞掉。
+            for i in 1 2; do
+              if git push; then exit 0; fi
+              echo "push 被打回（第 $i 次），rebase 後重試"
+              git pull --rebase --autostash
+            done
             git push
           fi

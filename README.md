@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v4.7-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v4.15-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-08-13 12:11 +08:00（日曆的「今日」改用專屬綠色）
+> 最後更新：2026-09-02 12:49 +08:00（修掉三條全表掃描的查詢，D1 每日讀取量降 99.9%）
 
 ## 兩種跑法
 
@@ -34,6 +34,20 @@ Cloudflare Worker  (cron 每分鐘，台北 09:00-21:30)
 ```
 
 歷史資料刻意走 repo 靜態檔而非 Worker：不消耗 Worker 額度（該帳號與其他專案共用每日 10 萬次上限），且歷史資料在 GitHub 上直接可下載。
+
+### D1 的額度是算「讀了幾列」，不是「回了幾列」
+
+免費方案上限 **500 萬 rows_read/天**，超過之後所有會讀列的請求一律回錯誤，直到 UTC 00:00 重置。
+
+這裡踩過一次坑（v4.15）：取每店最新值的 `GROUP BY store_id` + `MAX(timestamp)` 只回 11 列，但 SQLite 沒有 index skip-scan，實際掃完整張表 —— cron 每分鐘打一次，單這一條就吃掉額度的 2.1 倍。改成逐店 `WHERE store_id = ? ORDER BY timestamp DESC LIMIT 1` 後降到 11 列。
+
+**動到任何 D1 查詢時，用 `--json` 跑一次看 `meta.rows_read`**，不要只看回傳幾列：
+
+```bash
+npx wrangler d1 execute dintaifung --remote --json --command "<你的 SQL>" | grep rows_read
+```
+
+兩個容易踩的形態：對索引欄位做函式運算（`substr(timestamp,1,10)`）索引就失效；聚合函式看起來只回幾列但代價是全表。另外 D1 對 compound SELECT 的 term 數上限很低（實測 5 可、7 不可），`UNION ALL` 要分批。
 
 ### 雲端版操作
 
