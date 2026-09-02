@@ -187,6 +187,73 @@ def migrate_csv_if_needed():
         print(f"  [遷移] 舊 CSV 已改名為 {os.path.basename(backup)}", flush=True)
 
 
+# ── 本機前端 ──────────────────────────────────────
+#
+# 本機版原本有自己的 index.html，是 docs/index.html 的手工複本。
+# 兩份各自演進的結果是分歧了 925 行、docs 版多出 14 個函式：
+# 日曆式日期選擇、明確的連線錯誤狀態、抓取失敗就不延伸線條的保護、
+# 固定台北時區、卡片的鍵盤無障礙 —— 本機版一個都沒有。
+# 而 CHANGELOG 每次都寫「root/index.html 同步」，其實只同步了那一次改到的地方。
+#
+# 手動再同步一次只會再漂移一次。改成本機版直接用 docs/index.html，
+# 差異用替換處理 —— 剩下一份前端，漂移在結構上就不可能發生。
+#
+# 每個替換都必須命中，否則丟例外。靜默失敗會產生一個「載入得起來但行為不對」
+# 的頁面（例如 API_BASE 沒換掉，本機版就會去打線上 Worker 而不是本機 DB），
+# 那比整頁壞掉更難發現。
+FRONTEND_SRC = os.path.join(BASE_DIR, "docs", "index.html")
+
+FRONTEND_PATCHES = [
+    # (說明, 原字串, 取代為)
+    ("API 走同源",
+     "const API_BASE = 'https://dintaifung-queue.dannynycc.workers.dev';",
+     "const API_BASE = '';   // 本機版：同源相對路徑"),
+
+    # 本機沒有 docs/data 靜態檔，歷史日一律回頭問 API（DB 保留全部 raw）。
+    # 指向一個真的存在、回空陣列的端點，而不是留著會 404 的路徑 ——
+    # archiveDates 因此是空集合，fetchChanges 的靜態檔分支永遠不會進去。
+    ("歷史檔索引指向本機空端點",
+     "const ARCHIVE_BASE = 'data';",
+     "const ARCHIVE_BASE = '/api/archive';   // 本機版：無靜態歷史檔"),
+
+    # 本機版 24 小時收集，沒有抓取視窗。影響 x 軸預設範圍與
+    # 「非抓取時段」的判斷 —— 沿用雲端的 09:00–21:30 會把凌晨的資料
+    # 畫到軸外，並把正常的深夜抓取標成異常。
+    ("時間軸改為 24 小時",
+     "const FETCH_WINDOW_START_MIN = 9 * 60;         // 09:00",
+     "const FETCH_WINDOW_START_MIN = 0;              // 本機版 24 小時收集"),
+    ("時間軸改為 24 小時（結束）",
+     "const FETCH_WINDOW_END_MIN = 21 * 60 + 30;     // 21:30",
+     "const FETCH_WINDOW_END_MIN = 24 * 60 - 1;      // 本機版 24 小時收集"),
+
+    # 標題加註，避免對著本機版的畫面以為在看線上站（兩者資料來源不同）。
+    ("標題加註本機版",
+     "<title>鼎泰豐全分店 — 候位監控</title>",
+     "<title>鼎泰豐全分店 — 候位監控（本機版）</title>"),
+]
+
+
+def build_local_html():
+    """讀 docs/index.html，套上本機設定後回傳 bytes。"""
+    if not os.path.exists(FRONTEND_SRC):
+        raise RuntimeError(
+            f"找不到前端來源 {FRONTEND_SRC}。"
+            "本機版現在直接使用 docs/index.html，請確認 docs/ 目錄完整。"
+        )
+    with open(FRONTEND_SRC, encoding="utf-8") as f:
+        html = f.read()
+
+    for label, old, new in FRONTEND_PATCHES:
+        if old not in html:
+            raise RuntimeError(
+                f"前端替換失敗（{label}）：docs/index.html 裡找不到目標字串。\n"
+                f"  找的是：{old}\n"
+                "docs/index.html 改過寫法時要同步更新 app.py 的 FRONTEND_PATCHES。"
+            )
+        html = html.replace(old, new, 1)
+    return html.encode("utf-8")
+
+
 def db_insert(ts, results):
     """同時寫 wait_log（raw）+ wait_changes（只在變化時插）"""
     with db_connect() as conn:
@@ -421,10 +488,33 @@ class Handler(SimpleHTTPRequestHandler):
         elif parsed.path == "/api/latest":
             self._json_response(db_latest_per_store())
         elif parsed.path == "/api/stores":
-            self._json_response(STORES)
+            # 契約對齊 Worker 的 /api/stores：欄位名 store_id / store_name，
+            # 且排除永久停用的分店。前端拿它當「權威分店清單」——
+            # 回 {"id","name"} 的話，卡片標題會全部變成 undefined；
+            # 沒排除信義店的話，畫面會多一張永遠寫著「資料中斷」的卡片。
+            self._json_response([
+                {"store_id": s["id"], "store_name": s["name"]}
+                for s in STORES if s["id"] not in EXCLUDED_STORE_IDS
+            ])
+        elif parsed.path == "/api/archive/index.json":
+            # 本機版沒有 docs/data 靜態歷史檔（DB 裡就有完整 raw）。
+            # 回空陣列讓前端的「靜態檔優先」分支自然關閉，
+            # 而不是讓它去打一個必定 404 的路徑再吞掉錯誤。
+            self._json_response([])
         elif parsed.path == "/" or parsed.path == "/index.html":
-            with open(os.path.join(BASE_DIR, "index.html"), "rb") as f:
-                self._bytes_response(f.read(), "text/html; charset=utf-8")
+            # 替換失敗要看得見。丟出去變成 500 + 一頁 traceback 的話，
+            # 沒人會知道原因是「docs/index.html 改了寫法、FRONTEND_PATCHES 沒跟上」。
+            try:
+                payload = build_local_html()
+            except RuntimeError as e:
+                self._bytes_response(
+                    ("<!DOCTYPE html><meta charset=utf-8>"
+                     "<h1>本機前端組不起來</h1><pre>" + str(e) + "</pre>").encode("utf-8"),
+                    "text/html; charset=utf-8",
+                )
+                print(f"  [錯誤] 前端組裝失敗: {e}", flush=True)
+                return
+            self._bytes_response(payload, "text/html; charset=utf-8")
         else:
             self.send_error(404, "Not Found")
 
@@ -448,8 +538,8 @@ class Handler(SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             pass
 
-    def log_message(self, *args):
-        pass
+    def log_message(self, format, *args):   # noqa: A002 - 對齊基底類別的簽名
+        pass                                 # 每筆請求都印會把 server.log 灌爆
 
 
 # Codex 2026-05-08 10:22 +08:00：改用 threaded server，避免單一慢請求阻塞 watchdog 健康檢查。

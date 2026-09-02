@@ -1,5 +1,80 @@
 # Changelog
 
+## v4.17 — 2026-09-02 14:09
+
+兩份前端合併成一份。刪掉 root `index.html`（1,273 行），本機版改用 `docs/index.html`。
+
+### 為什麼不是「再同步一次」
+
+v4.16 盤點出兩份前端已分歧 925 行、`docs` 版多 14 個函式。手動搬一次可以解決當下，
+但下次改動又會漂移 —— 過去每次 CHANGELOG 都寫「root/index.html 同步」，
+實際上只同步了那一次改到的地方，累積下來就是這 925 行。
+
+改成本機版直接讀 `docs/index.html`，由 `app.py` 在提供時替換四個常數。
+**剩下一份前端，漂移在結構上不可能發生。**
+
+### 盤點：兩份前端的真實差異
+
+同步前先確認差異在哪，而不是直接覆蓋：
+
+| 項目 | `docs`（線上） | root（本機） | 處理 |
+|---|---|---|---|
+| API 位址 | Worker 絕對網址 | 同源相對路徑 | 替換 `API_BASE` 為 `''` |
+| 歷史資料 | `docs/data/*.json` | 無，全走 API | `ARCHIVE_BASE` 指向本機空端點 |
+| 抓取視窗 | 09:00–21:30 | 24 小時 | 替換 `FETCH_WINDOW_*` 為 0 / 1439 |
+| `/api/stores` | `{store_id, store_name}`、不含信義店 | **`{id, name}`、含信義店** | 改 `app.py` 對齊契約 |
+| `/api/changes` | 無 carry-over | 多回 `_carry` 列 | 多餘欄位無害，前端忽略 |
+
+只有 `/api/stores` 是真正的契約衝突：回 `{id, name}` 的話卡片標題會全變成 undefined，
+沒排除信義店則會多一張永遠寫著「資料中斷」的卡片。查過舊的 root 前端根本沒用這個端點
+（只用 changes / latest / dates），watchdog 也只看 HTTP 200 —— 改格式零破壞。
+
+`ARCHIVE_BASE` 指向 `/api/archive`（`app.py` 固定回 `[]`）而不是留著會 404 的路徑：
+`archiveDates` 因此是空集合，`fetchChanges` 的靜態檔分支自然永遠不會進去，
+不必為了本機版去改前端的邏輯。
+
+### 替換失敗必須看得見
+
+`FRONTEND_PATCHES` 的每一條都必須命中，否則丟例外並回一頁明確說明。
+靜默失敗會產生「載入得起來但行為不對」的頁面 —— 例如 `API_BASE` 沒換掉，
+本機版就會去打線上 Worker 而不是本機 DB，畫面看起來完全正常但資料來源是錯的。
+
+實測（把 `docs/index.html` 的單引號改成雙引號模擬上游改寫法）：
+
+```
+HTTP 200
+本機前端組不起來
+前端替換失敗（API 走同源）：docs/index.html 裡找不到目標字串。
+  找的是：const API_BASE = 'https://dintaifung-queue.dannynycc.workers.dev';
+docs/index.html 改過寫法時要同步更新 app.py 的 FRONTEND_PATCHES。
+```
+
+### 驗證
+
+沙盒跑真的 `app.py` + 真的 39 MB `wait_log.db` 副本（沒碰原檔），真瀏覽器實測：
+
+| 檢查 | 結果 |
+|---|---|
+| 四個替換全部命中、Worker 網址已不存在 | ✓ |
+| 標題 | 鼎泰豐全分店 — 候位監控（本機版）|
+| Chart.js | 4.5.1（SRI 通過）|
+| 今日 | 11 卡 / 11 線 / 11 圖例，x 軸 `00:00:00`–`23:59:59`（24 小時替換生效）|
+| 歷史日 5/17 | 639 筆、11 條線、卡片顯示「當日最後 23:30」|
+| 日曆 | 5 月正確標出 4–18 有資料 |
+| `/api/stores` | 11 家、欄位 `store_id`/`store_name`、不含信義店 |
+| 圖例點擊篩選 | 11 線 → 1 線、表格 500 → 64 列、圖例仍 11 項、再點回復 |
+| 線條高亮 | 高亮者 4.5、其餘 1 且加 `40` 透明度、取消後回到 2 |
+
+hover 的 rAF 排程無法在此驗證 —— 受控分頁的 `visibilityState` 是 `hidden`，
+Chrome 會暫停 `requestAnimationFrame`（另外排一個與專案無關的 rAF 對照，
+1.8 秒內同樣沒執行，確認是瀏覽器行為而非程式問題）。
+繪製邏輯本身用直接呼叫 `paintHighlight()` 驗過，且那段程式碼與線上站逐字相同。
+
+### 線上站零風險
+
+這次**沒有修改 `docs/index.html` 的任何一個位元組** —— 同步方向是 docs → root，
+不是反過來。`git diff docs/` 為空可證。線上站在 commit 後另行確認仍正常。
+
 ## v4.16 — 2026-09-02 13:39
 
 全 repo 逐檔審視的結果。找到的問題分成三類：會誤導使用者的、會外洩資料的、

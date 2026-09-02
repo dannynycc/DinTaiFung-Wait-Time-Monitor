@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v4.16-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v4.17-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-09-02 13:39 +08:00（全 repo 審視：歷史日卡片不再顯示今日數字、本機 server 只綁 127.0.0.1、CDN 鎖版本加 SRI）
+> 最後更新：2026-09-02 14:09 +08:00（兩份前端合併成一份：本機版改用 docs/index.html，刪掉 1,273 行重複程式碼）
 
 ## 兩種跑法
 
@@ -14,16 +14,13 @@
 |---|---|---|
 | 抓取 | `app.py`（電腦要開著） | Cloudflare Worker cron |
 | 儲存 | 本機 `wait_log.db` | Cloudflare D1 |
-| 前端 | `index.html`（localhost:5678） | `docs/`（GitHub Pages） |
+| 前端 | `docs/index.html`（localhost:5678，由 `app.py` 套上本機設定） | `docs/index.html`（GitHub Pages） |
 | 抓取時段 | 24 小時 | 台北 09:00–21:30 |
 
 兩者互不干擾，可並存。本文件先講雲端版，本機版說明在後半。
 
-> **本機版目前處於停用狀態**（`wait_log.db` 最後寫入時間是 2026-05-18，之後由雲端版接手）。
-> 它仍可執行，但前端功能落後 `docs/` 版：沒有日曆式日期選擇、沒有明確的連線錯誤狀態、
-> 沒有「抓取失敗就不延伸線條」的保護（該店會被畫成一條自信的水平線），
-> 時間也走瀏覽器當地時區而非固定台北。核心的資料正確性修正（非數值狀態處理、
-> 上游毛刺偵測）兩邊都有。要重新啟用本機版收集資料前，先確認這些落差可以接受。
+> **本機版目前沒有在收集資料**（`wait_log.db` 最後寫入時間是 2026-05-18，之後由雲端版接手），
+> 但隨時可以重新啟動 —— 前端功能與線上站完全一致，因為兩者用的就是同一個檔案。
 
 ## 雲端架構
 
@@ -81,7 +78,7 @@ npx wrangler tail                                                # 看即時 log
 - **變化事件表格**：`時間 | 分店 | 5分→10分 | 前值持續 32 分鐘`，比每分鐘重複行有意義
 - **單店篩選**：點卡片、點 Legend、或下拉選單，圖表+表格同步切換
 - **手機/平板/桌機 RWD** 全支援
-- 「今日」自動刷新（本機版 15 秒、雲端版 60 秒 —— 雲端拉長是因為資料本來就 60 秒才變，且每次刷新都要打 Worker）；歷史日不刷新（省 CPU）
+- 「今日」每 60 秒自動刷新（資料本來就 60 秒才變，更頻繁只是重複請求）；歷史日不刷新（省 CPU）
 - 前端輪詢具備逾時取消與 in-flight guard，後端卡住或斷線時不會堆積未完成請求
 
 ## 快速啟動
@@ -154,7 +151,7 @@ pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
 │   │                         #             / daily_summary / fetch_health）
 │   └── wrangler.toml         #   部署設定（cron 時段、D1 綁定）
 ├── docs/                     # GitHub Pages 站台
-│   ├── index.html            #   前端（時區已改為固定台北）
+│   ├── index.html            #   前端（雲端與本機共用這一份）
 │   └── data/                 #   每日變化事件靜態檔 + index.json
 ├── tools/
 │   └── export_history.py     # 本機 SQLite → docs/data JSON
@@ -162,8 +159,9 @@ pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
 │   └── daily-export.yml      # 每日台北 03:00 從 D1 匯出進 repo
 │
 ├── app.py                    # ── 本機版 ── 後端 + Web server
+│                              #   前端直接用 docs/index.html，套 FRONTEND_PATCHES
+│                              #   的四個常數（API 位址、歷史檔、24 小時軸、標題）
 ├── watchdog.py               # Supervisor（pythonw 跑，自動重啟 app）
-├── index.html                # 本機前端（Chart.js + vanilla JS）
 ├── start.bat                 # 雙擊啟動（背景 hidden）
 ├── stop.bat                  # 雙擊停止整個 process tree
 ├── wait_log.db               # SQLite 資料庫（自動產生）
@@ -186,7 +184,8 @@ pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
 | `GET /api/latest` | 每店最新一筆 raw（給卡片用，含叫號 + last_time） |
 | `GET /api/dates` | DB 中所有有資料的日期（給日期下拉用） |
 | `GET /api/data?date=YYYY-MM-DD` | 指定日期 raw 紀錄（保留供 audit/debug） |
-| `GET /api/stores` | 分店清單 |
+| `GET /api/stores` | 分店清單（`{store_id, store_name}`，與 Worker 同契約，已排除永久停用的分店） |
+| `GET /api/archive/index.json` | 固定回 `[]`。本機沒有靜態歷史檔，用它讓前端的「靜態檔優先」分支自然關閉 |
 
 雲端版（`https://dintaifung-queue.dannynycc.workers.dev`）提供同名端點，另加一個：
 
