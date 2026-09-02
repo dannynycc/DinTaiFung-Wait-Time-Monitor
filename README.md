@@ -6,7 +6,9 @@
 
 ![version](https://img.shields.io/badge/version-v4.18-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-09-02 14:24 +08:00（訂正一個未查證的因果；補上 wrangler d1 insights 的官方用量數字）
+> 最後更新：2026-09-02 14:37 +08:00（訂正一個未查證的因果；補上 wrangler d1 insights 的官方用量數字）
+
+> **接手開發前先讀 [`HANDOFF.md`](HANDOFF.md)** —— 待辦事項、目前架構的注意點、已知但未處理的項目都在那裡。
 
 ## 兩種跑法
 
@@ -169,6 +171,7 @@ pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
 │                              └─ wait_changes 變化事件（推導+持續累積）
 ├── server.log / server.err.log  # app.py 執行 log（gitignore）
 ├── watchdog.log              # watchdog 事件 log（gitignore）
+├── HANDOFF.md                # 接手開發先讀這份（待辦 + 現況注意點）
 ├── README.md
 └── CHANGELOG.md
 ```
