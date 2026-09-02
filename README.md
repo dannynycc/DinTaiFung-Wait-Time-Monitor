@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v4.17-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v4.18-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-09-02 14:09 +08:00（兩份前端合併成一份：本機版改用 docs/index.html，刪掉 1,273 行重複程式碼）
+> 最後更新：2026-09-02 14:24 +08:00（訂正一個未查證的因果；補上 wrangler d1 insights 的官方用量數字）
 
 ## 兩種跑法
 

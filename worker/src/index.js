@@ -476,7 +476,14 @@ async function handleApi(url, env) {
     //
     // 探測範圍取 7 天而不是 RAW_RETENTION_DAYS+1（=3）：roll-up 若連續幾天沒跑成功，
     // daily_summary 就會缺那幾天，剛好卡在兩段的接縫上而整個消失。
-    // 這次就是真的發生過 —— 8/31 起 Worker 因額度超限回 500，roll-up 連四天沒跑。
+    //
+    // 訂正（2026-09-02）：這裡原本寫「8/31 起 roll-up 連四天沒跑」，那是**錯的**，
+    // 是看到 daily_summary 最新只到 08-30 就下的結論，沒有查證。
+    // fetch_health 顯示 08-31 / 09-01 / 09-02 每天都是 ROLLUP_OK（8,261 / 8,126 /
+    // 8,245 筆）—— D1 額度在 UTC 00:00（台北 08:00）重置，roll-up 在 09:02 跑，
+    // 那時額度還很充足；超限發生在當天下午。daily_summary 只到 08-30 是正常節奏
+    // （raw 保留 2 天，每天處理的是兩天前的資料），不是積壓。
+    // 7 天的餘裕仍然保留：那是防禦性的，成本只有每天一筆索引查詢。
     const PROBE_DAYS = 7;
     const stmts = [env.DB.prepare('SELECT DISTINCT date AS d FROM daily_summary')];
     for (let i = 0; i < PROBE_DAYS; i++) {
