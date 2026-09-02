@@ -4,9 +4,9 @@
 
 **線上看板 → https://dannynycc.github.io/DinTaiFung-Wait-Time-Monitor/**
 
-![version](https://img.shields.io/badge/version-v4.15-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v4.15.1-brown) ![python](https://img.shields.io/badge/python-3.8%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> 最後更新：2026-09-02 12:49 +08:00（修掉三條全表掃描的查詢，D1 每日讀取量降 99.9%）
+> 最後更新：2026-09-02 13:05 +08:00（修掉三條全表掃描的查詢，D1 每日讀取量降 99.9%；匯出失敗改開 Issue 通知）
 
 ## 兩種跑法
 

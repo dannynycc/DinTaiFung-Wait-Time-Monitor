@@ -1,5 +1,21 @@
 # Changelog
 
+## v4.15.1 — 2026-09-02 13:05
+
+`daily-export` 失敗時開 Issue 通知。
+
+這次事故真正的代價不是 bug 本身，而是**偵測得到卻沒人知道**：workflow 從 8/26
+起每天都正確判定失敗（它檢查 `/api/health`，Worker 回 500 就 exit 1），
+但失敗只是靜靜躺在 Actions 頁面，一週後才由 Cloudflare 的告警信揭穿。
+
+加一個 `if: failure()` 的步驟開 GitHub Issue —— Issue 會寄信、會出現在 repo 首頁，
+而 Actions 的紅燈不會。已經有一張開著就只留言，不每天開一張新的洗版。
+Issue 內文直接寫上排查方向（D1 rows_read 怎麼查、push 衝突怎麼看）
+和「資料不會因此遺失、修好後 `workflow_dispatch` 補跑即可」。
+
+這一步還沒有在真實失敗中驗證過 —— 它只在 `failure()` 時執行，
+要故意弄壞才測得到，目前僅確認 YAML 解析正確、shell 語法與 jq 表達式無誤。
+
 ## v4.15 — 2026-09-02 12:49
 
 D1 免費額度被三條全表掃描的查詢吃爆，Worker 從 8/26 起間歇回 500、每日匯出連續失敗。
@@ -86,11 +102,6 @@ index skip-scan，`idx_changes_store_ts` 幫不上忙，實際是掃完整張表
 non-fast-forward 打回，資料明明抓對了整個 run 卻失敗。各 run 寫的是不同的
 `docs/data/*.json`，內容本來就不衝突，加上 rebase 重試（最多 3 次，
 最後一次不吞錯誤，真的推不上去仍要讓 step 失敗）。
-
-### 已知仍未處理
-
-`daily-export` 失敗時沒有主動通知，這正是這次拖了一週才發現的原因。
-GitHub Actions 預設會寄失敗信給 repo owner，但顯然沒被注意到。
 
 ## v4.14 — 2026-08-13 14:32
 

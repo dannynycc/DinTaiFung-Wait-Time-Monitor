@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: write
+  issues: write   # 失敗時開 Issue 通知，見檔尾
 
 env:
   # runner 預設 UTC，不設這個的話 date 算出來的「昨天」會在台北時間 08:00 前後錯一天
@@ -192,4 +193,37 @@ jobs:
               git pull --rebase --autostash
             done
             git push
+          fi
+
+      # 這個 workflow 從 2026-08-26 起連續失敗了一週（Worker 因 D1 額度超限回 500），
+      # 它每天都正確偵測到並 fail —— 但失敗只是靜靜躺在 Actions 頁面，
+      # 最後是 Cloudflare 的告警信才讓人發現。偵測得到卻沒人知道，等於沒偵測。
+      #
+      # 開一張 Issue 才會真的推到通知（GitHub 會寄信、repo 首頁也看得到）。
+      # 已經有一張開著就只留言，不要每天開一張新的洗版；修好後手動關掉即可。
+      - name: 失敗時開 Issue 通知
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TARGET_DATE: ${{ steps.pick.outputs.date }}
+        run: |
+          body="匯出失敗。目標日期：\`${TARGET_DATE:-未決定}\`
+
+          Run log：$RUN_URL
+
+          常見原因：
+          - Worker 回 500 → 多半是 D1 每日 rows_read（免費 500 萬）超限，UTC 00:00 才重置。
+            用 \`npx wrangler d1 execute dintaifung --remote --json --command \"<SQL>\" | grep rows_read\`
+            找出掃全表的查詢（見 README「D1 的額度是算讀了幾列」）。
+          - push 被 non-fast-forward 打回 → 通常是兩個 run 同時在跑。
+
+          資料本身不會因為這次失敗而遺失（D1 的 wait_changes 沒有清理機制），
+          修好後用 workflow_dispatch 指定日期補跑即可。"
+          num=$(gh issue list --state open --json number,title \
+                  --jq '[.[] | select(.title | startswith("daily-export 失敗")) | .number] | first // empty')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "$body"
+          else
+            gh issue create --title "daily-export 失敗（${TARGET_DATE:-未決定}）" --body "$body"
           fi
