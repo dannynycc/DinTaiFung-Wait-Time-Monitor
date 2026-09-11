@@ -158,7 +158,7 @@ pythonw.exe  watchdog.py  ← 你啟動的（supervisor）
 ├── tools/
 │   └── export_history.py     # 本機 SQLite → docs/data JSON
 ├── .github/workflows/
-│   └── daily-export.yml      # 每日台北 03:00 從 D1 匯出進 repo
+│   └── daily-export.yml      # 每日台北 03:00 排程從 D1 匯出進 repo（GitHub 實際常晚 2～3 小時起跑）
 │
 ├── app.py                    # ── 本機版 ── 後端 + Web server
 │                              #   前端直接用 docs/index.html，套 FRONTEND_PATCHES

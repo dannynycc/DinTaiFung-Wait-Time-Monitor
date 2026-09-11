@@ -1,61 +1,13 @@
 # HANDOFF — 開新 session 先讀這份
 
-> 最後更新：2026-09-02 14:37 +08:00（session 結束時寫）
-> 完整脈絡在 `CHANGELOG.md` 的 v4.15 ～ v4.18。
+> 最後更新：2026-09-11 09:35 +08:00
+> 完整脈絡在 `CHANGELOG.md` 的 v4.15 ～ v4.19。
 
 ---
 
-## 待辦（唯一一項，2026-09-03 之後執行）
+## 待辦
 
-### 驗證 D1 用量已回到正常
-
-```bash
-cd worker
-npx wrangler d1 insights dintaifung --timePeriod 1d --sort-by reads --count 25
-```
-
-**為什麼要跑這個**：2026-09-02 修掉三條全表掃描的查詢（v4.15）之後，我只能給出
-「每日約 76,000 rows_read」的推算 —— `insights` 的最小時間視窗是 1 天，
-當天跑會橫跨修復前後，數字混在一起。**9/3 之後跑，那 24 小時全是新版，
-才是乾淨的實證。**
-
-#### 判準：符合以下全部才算通過
-
-| 檢查 | 期望 |
-|---|---|
-| `SELECT store_id, wait_time, MAX(timestamp) ... GROUP BY store_id` | **完全不出現**（舊查詢已刪除）|
-| `SELECT DISTINCT substr(timestamp,1,10) ... FROM wait_changes` | **完全不出現**（舊 `/api/dates`）|
-| 所有查詢的 `totalRowsRead` 加總 | **< 200,000**（額度 5,000,000 的 4% 以內）|
-| roll-up 的 `INSERT INTO stop_changes ...` | 約 70,000／次，一天 1 次 |
-| cron 的 `UNION ALL` 逐店查詢 | 每次 11 列；讀取量太小的話可能根本不進清單 |
-
-**若總量明顯超過 20 萬**：不要猜原因，用同樣的方法定位 ——
-挑出 `avgRowsRead` 最大的那條，拿它去 `wrangler d1 execute --json` 單獨跑一次，
-看 `meta.rows_read`。D1 的額度算的是**讀了幾列**不是回了幾列，
-一條只回 11 列的查詢可能掃了整張表（這就是這次事故的根因）。
-
-#### 解析輸出的兩個坑
-
-- `insights` 的 stdout 前面有 wrangler 的橫線與警告，`s.index('[')` 會切錯位置。
-  用 `s.index('[\n')` 找真正的 JSON 陣列起點。
-- Windows 的 python 預設 cp950，印中文或 `✓` 會炸。前面加 `PYTHONIOENCODING=utf-8`。
-
-一行搞定：
-
-```bash
-cd worker && npx wrangler d1 insights dintaifung --timePeriod 1d --sort-by reads --count 25 > /tmp/ins.json 2>&1
-PYTHONIOENCODING=utf-8 python -c "
-import json
-s = open('/tmp/ins.json', encoding='utf-8', errors='replace').read()
-d = json.loads(s[s.index('[\n'):])
-print('總計 rows_read =', f\"{sum(q['totalRowsRead'] for q in d):,}\", ' / 額度 5,000,000')
-for q in sorted(d, key=lambda x: -x['totalRowsRead']):
-    print(f\"  {' '.join(q['query'].split())[:60]:62} {q['numberOfTimesRun']:>5} 次 x {q['avgRowsRead']:>7,} = {q['totalRowsRead']:>10,}\")
-"
-```
-
-跑完把結果補進 `CHANGELOG.md`（新開一節或補在 v4.18 底下都可以），
-然後**把這一節從 HANDOFF 刪掉** —— 待辦完成就不該繼續佔著版面。
+目前沒有。（「驗證 D1 用量」已於 2026-09-11 完成，結果在 CHANGELOG v4.19：一天 110,762 列，額度的 2.2%。）
 
 ---
 
@@ -98,8 +50,11 @@ npx wrangler d1 execute dintaifung --remote --json --command "<SQL>" | grep rows
 ### 監控
 
 `daily-export` workflow 失敗時會開 GitHub Issue（v4.15.1）。
-這條路徑**還沒有在真實失敗中驗證過** —— 它只在 `if: failure()` 時執行，
-目前只確認了 YAML 解析、shell 語法與 jq 表達式無誤。下次真的失敗時留意它有沒有動作。
+已在真實失敗中驗證（2026-09-03 開了 Issue #1，之後每天留言）。
+
+🚨 **健康檢查的基準是「目標日 21:30 收盤」，不是「現在」**（v4.19）。
+GitHub 的 `schedule` 常晚 2～3 小時起跑，任何拿「現在」算新鮮度的門檻都會天天假紅。
+抓取視窗若改（`worker/wrangler.toml` 的 `crons`），要同步改 workflow 裡的 `WINDOW_CLOSE`。
 
 ---
 
@@ -125,3 +80,6 @@ npx wrangler d1 execute dintaifung --remote --json --command "<SQL>" | grep rows
    「roll-up 連四天沒跑」，查 `fetch_health` 才發現每天都 `ROLLUP_OK` ——
    額度在台北 08:00 重置，roll-up 09:02 跑時額度充足，超限是當天下午的事。
    已在 v4.18 訂正。
+4. **守門的尺要釘在自己控制得了的量上。** v4.16 的健康檢查拿「現在」當基準，
+   而「現在」由 GitHub 排程決定（實測每天晚 2～3 小時），於是 9 天假紅、9 天資料沒進 repo。
+   手動觸發測試全綠是因為中午跑 cron 正在抓 —— 測方便的情境不等於測過排程情境。已在 v4.19 修正。
